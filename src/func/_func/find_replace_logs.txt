@@ -1,0 +1,36 @@
+past->blockString(pnode, past->Sig, "max() or min()");
+==> 
+blockString1(*past, pnode, past->Sig, "max() or min()");
+
+past->blockLogical1(pnode, past->Sig, "max() or min()");
+==> 
+blockLogical1(*past, pnode, past->Sig, "max() or min()");
+
+tone_fm.cpp
+throw CAstException(FUNC_SYNTAX, *past, p).proc("Frequency exceeds Nyquist frequency.");
+==>
+throw exception_func(*past, p, "Frequency exceeds Nyquist frequency.", "tone", 1);
+
+past->checkScalar(pnode, duration);
+==>
+ensureScalar1(*past, pnode, duration, "tone()", 2);
+
+if (!_initph.IsScalar())
+throw CAstException(FUNC_SYNTAX, *past, p).proc("Initial_phase must be a scalar.");
+==>
+ensureScalar1(*past, pnode, _initph, "Initial_phase, tone()", 3);
+
+
+In _func files
+#include "sigproc.h"
+==> 
+#include "functions_common.h"
+
+Replace CAstSig with skope (by word)
+
+Then modify each gate function
+1) change the function definition
+void _ramp(CAstSig* past, const AstNode* pnode) 
+==>
+void _ramp(skope* past, const AstNode* pnode, const vector<CVar>& args)
+
