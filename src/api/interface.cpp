@@ -8,7 +8,7 @@
 #include <iterator>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
-#include "aux2_core.h"
+#include <auxe/aux2_core.h>
 #include "utils.h"
 
 struct auxContext : AuxScope {};
