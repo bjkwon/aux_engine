@@ -24,6 +24,7 @@ endif()
 # -------------------------
 add_executable(aux2
   main.cpp
+  audioplay.cpp
   auxenv.cpp
   utils.cpp
 )
