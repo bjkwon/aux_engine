@@ -211,12 +211,6 @@ void EngineRuntime::InitBuiltInFunctions()
 
 	SET_BUILTIN_FUNC("squeeze", vector);
 
-	SET_BUILTIN_FUNC("play", play);
-	SET_BUILTIN_FUNC("play", play2);
-	SET_BUILTIN_FUNC("stop", stop_pause_resume);
-	SET_BUILTIN_FUNC("pause", stop_pause_resume);
-	SET_BUILTIN_FUNC("resume", stop_pause_resume);
-
 	SET_BUILTIN_FUNC("error", error_warning);
 	SET_BUILTIN_FUNC("warning", error_warning);
 
@@ -300,49 +294,6 @@ void EngineRuntime::InitBuiltInFunctions()
 //	ft.func =  &_fdelete; // check
 //	builtin[name] = ft;
 //
-//#ifndef NO_PLAYSND
-//	ft.alwaysstatic = false;
-//	ft.narg1 = 1;	ft.narg2 = 1;
-//	ft.funcsignature = "(audio_handle)";
-//	name = "pause";
-//	ft.func = &_pause_resume;
-//	builtin[name] = ft;
-//	name = "resume";
-//	ft.func = &_pause_resume;
-//	builtin[name] = ft;
-//	name = "stop";
-//	ft.func = &_stop;
-//	builtin[name] = ft;
-//	name = "qstop";
-//	ft.func = &_stop;
-//	builtin[name] = ft;
-//
-//	ft.funcsignature = "(audio_signal [, repeat=1]) or (audio_handle, audio_signal [, repeat=1])";
-//	ft.narg1 = 1;	ft.narg2 = 3;
-//	name = "play";
-//	ft.func =  &_play;
-//	builtin[name] = ft;
-//	ft.funcsignature = "(deviceID, recording_duration [=-1;indefinite], mono1_or_stereo2 [=1], callback_duration_ms [=setting in ini])";
-//	ft.narg1 = 1;	ft.narg2 = 4;
-//	name = "record";
-//	ft.func = &_record;
-//#endif
-//	builtin[name] = ft;
-//
-//	ft.alwaysstatic = true;
-//	name = "msgbox";
-//	ft.narg1 = 1;	ft.narg2 = 0;
-//	ft.funcsignature = "(msg_body_with_printf_style)";
-//	ft.func =  &_msgbox;
-//	builtin[name] = ft;
-//
-//	ft.alwaysstatic = false;
-//	name = "inputdlg";
-//	ft.narg1 = 2;	ft.narg2 = 99;
-//	ft.funcsignature = "(title, msg_body)";
-//	ft.func =  &_inputdlg;
-//	builtin[name] = ft;
-//
 
 	ft.narg1 = 1;	ft.narg2 = 1;
 	ft.funcsignature = "(value_or_array)";
@@ -353,17 +304,6 @@ void EngineRuntime::InitBuiltInFunctions()
 		ft.func =  NULL;
 		builtin.emplace(name, ft);
 	}
-
-	//name = "input";
-	//ft.alwaysstatic = false;
-	//ft.funcsignature = "(prompt_message)";
-	//ft.func = &aux_input;
-	//builtin[name] = ft;
-
-	//name = "esc";
-	//ft.funcsignature = "(string)";
-	//ft.func = &_esc;
-	//builtin[name] = ft;
 }
 
 static inline complex<auxtype> r2c_sqrt(complex<auxtype> x) { return sqrt(x); }

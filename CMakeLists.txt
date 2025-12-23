@@ -158,22 +158,7 @@ auxe_link_first_found(auxe
     samplerate-0
 )
 
-# ---- Optional PortAudio ----
-if(AUXE_ENABLE_PORTAUDIO)
-  find_package(portaudio CONFIG QUIET)
-  auxe_link_first_found(auxe
-    TARGETS
-      portaudio
-      portaudio::portaudio
-      PortAudio::PortAudio
-    LIBNAMES
-      portaudio
-      portaudio_x64
-  )
-  target_compile_definitions(auxe PRIVATE AUXE_ENABLE_PORTAUDIO=1)
-else()
-  target_compile_definitions(auxe PRIVATE AUXE_ENABLE_PORTAUDIO=0)
-endif()
+
 
 # Linux extras (safe; does nothing on Windows)
 if(UNIX AND NOT APPLE)

@@ -173,6 +173,16 @@ bool aux_get_segment(const AuxObj& v, int channel_index, int segment_index, AuxS
     return true;
 }
 
+/*
+* Make a copy of the buf data at the specified time point and the length.
+* len is meant to be small enough to make copying of the data buffer easy.
+* Used playCallback in audio_play.cpp
+
+bool aux_get_segment_buffer(const AuxObj& v, double tpoint_sec, int len, vector<auxtype>& out1, vector<auxtype>& out2)
+{
+
+}
+*/
 size_t aux_flatten_channel_length(const AuxObj& v, int channel_index)
 {
     const CSignals* ch = get_channel(v, channel_index);
