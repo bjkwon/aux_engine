@@ -95,8 +95,7 @@ Build:
 ```bash
 cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DAUXE_BUILD_SHARED=ON \
-  -DAUXE_ENABLE_PORTAUDIO=OFF
+  -DAUXE_BUILD_SHARED=ON
 
 cmake --build build -j
 cmake --install build --prefix ./install
@@ -123,9 +122,8 @@ Configure and build:
 
 ```powershell
 cmake -S . -B build -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE=C:\Users\bjehk\Documents\dev\vcpkg\scripts\buildsystems\vcpkg.cmake `
-  -DAUXE_BUILD_SHARED=ON `
-  -DAUXE_ENABLE_PORTAUDIO=OFF
+  -DCMAKE_TOOLCHAIN_FILE={repo_cloned_dir}\scripts\buildsystems\vcpkg.cmake `
+  -DAUXE_BUILD_SHARED=ON
 
 cmake --build build --config Release
 cmake --install build --config Release --prefix .\install
@@ -150,6 +148,28 @@ A UI / front-end application should:
 auxe does not care *where* data came from or *how* it will be saved.
 
 ---
+## Example: aux2 (console-based app using auxe)
+
+
+## Build Dependencies
+
+### Required
+- **PortAudio** (real-time audio device I/O)
+  - Device playback/recording
+
+Configure and build:
+
+```powershell
+# aux2 supports audio play with portaudio.
+vcpkg install portaudio 
+
+cmake -S . -B build -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE={repo_cloned_dir}\scripts\buildsystems\vcpkg.cmake `
+  -DAUXE_BUILD_SHARED=ON `
+
+cmake --build build --config Release
+cmake --install build --config Release --prefix .\install
+```
 
 ## Status
 
