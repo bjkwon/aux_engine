@@ -57,6 +57,49 @@ include(GNUInstallDirs)
 install(TARGETS aux2
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+# --- Readline support (non-Windows) ------------------------------------------
+if(NOT WIN32)
+
+  # Help CMake find Homebrew-installed readline on macOS
+  # Apple Silicon default prefix: /opt/homebrew
+  # Intel default prefix:        /usr/local
+  if(APPLE)
+    list(APPEND CMAKE_PREFIX_PATH
+      "/opt/homebrew/opt/readline"
+      "/usr/local/opt/readline"
+    )
+  endif()
+
+  # First try: CMake package/module (may or may not exist on a given machine)
+  find_package(Readline QUIET)
+
+  # If the package provided an imported target, use it.
+  if(TARGET Readline::Readline)
+    message(STATUS "Readline: using CMake target Readline::Readline")
+
+  else()
+    # Second try: pkg-config (very reliable on Linux; works on macOS if PKG_CONFIG_PATH is set
+    # or brew exports it)
+    find_package(PkgConfig REQUIRED)
+
+    # If you're on macOS and pkg-config can't find readline, you can also set:
+    #   export PKG_CONFIG_PATH="/opt/homebrew/opt/readline/lib/pkgconfig:/usr/local/opt/readline/lib/pkgconfig:$PKG_CONFIG_PATH"
+    pkg_check_modules(READLINE REQUIRED readline)
+
+    add_library(Readline::Readline INTERFACE IMPORTED)
+    target_include_directories(Readline::Readline INTERFACE ${READLINE_INCLUDE_DIRS})
+    target_link_directories(Readline::Readline INTERFACE ${READLINE_LIBRARY_DIRS})
+    target_link_libraries(Readline::Readline INTERFACE ${READLINE_LINK_LIBRARIES})
+
+    message(STATUS "Readline: using pkg-config (includes: ${READLINE_INCLUDE_DIRS})")
+  endif()
+
+  target_link_libraries(aux2 PRIVATE Readline::Readline)
+  target_compile_definitions(aux2 PRIVATE AUX_HAVE_READLINE=1)
+
+endif()
+# -----------------------------------------------------------------------------
+
 
 if(WIN32)
   # Where aux2.exe will be after build (multi-config VS generator)

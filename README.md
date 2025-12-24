@@ -62,7 +62,8 @@ This keeps auxe independent of storage formats and preserves the meaning of AUX 
 - `src/func/`
   Built-in math, DSP, and utility functions
 
-> Console/UI code (shells, readline, file handling) should live in a **separate repo**.
+- `example_apps/aux/`
+  Console app (this is included for illustration purposes. Ideally this should be in a separate repo.
 
 ---
 
@@ -86,8 +87,6 @@ Install dependencies (Debian/Ubuntu names shown):
 
 ```bash
 sudo apt install libfftw3-dev libsamplerate0-dev
-# optional:
-# sudo apt install portaudio19-dev
 ```
 
 Build:
@@ -114,8 +113,6 @@ git clone https://github.com/microsoft/vcpkg
 cd vcpkg
 .\bootstrap-vcpkg.bat
 .\vcpkg install fftw3 libsamplerate
-# optional:
-# .\vcpkg install portaudio
 ```
 
 Configure and build:
@@ -154,18 +151,31 @@ auxe does not care *where* data came from or *how* it will be saved.
 ## Build Dependencies
 
 ### Required
+- **Readline**
 - **PortAudio** (real-time audio device I/O)
   - Device playback/recording
 
 Configure and build:
 
+Install dependencies
+
+(Debian/Ubuntu names shown):
+```bash
+sudo apt install libreadline-dev portaudio19-dev
+```
+MacOS
+```bash
+brew install portaudio readline
+```
+Windows
 ```powershell
 # aux2 supports audio play with portaudio.
 vcpkg install portaudio 
 
 cmake -S . -B build -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE={repo_cloned_dir}\scripts\buildsystems\vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE={aux_engine_dir}\scripts\buildsystems\vcpkg.cmake `
   -DAUXE_BUILD_SHARED=ON `
+  -DCMAKE_PREFIX_PATH="{aux_engine_dir}\install"
 
 cmake --build build --config Release
 cmake --install build --config Release --prefix .\install
