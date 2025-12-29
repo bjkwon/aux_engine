@@ -5,7 +5,7 @@
 #include <mutex>
 #include <condition_variable>
 #include "portaudio.h"
-#include <auxe/aux2_core.h>
+#include <auxe/auxe.h>
 
 int fs;
 

@@ -3,7 +3,7 @@
 #include <sstream>
 #include "console.h"
 #include "portaudio.h"
-#include <auxe/aux2_core.h>
+#include <auxe/auxe.h>
 #include "utils.h"
 #include <array>
 

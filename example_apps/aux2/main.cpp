@@ -4,7 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <cassert>
-#include <auxe/aux2_core.h>
+#include <auxe/auxe.h>
 #include <filesystem> // Include the C++17 filesystem library
 #include "portaudio.h"
 #include "console.h"
