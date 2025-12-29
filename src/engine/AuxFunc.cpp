@@ -124,6 +124,8 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("gnoise", tparamonly);
 	SET_BUILTIN_FUNC("dc", tparamonly);
 	SET_BUILTIN_FUNC("silence", tparamonly);
+	SET_BUILTIN_FUNC("wave", wave);
+	SET_BUILTIN_FUNC("wavwrite", wavwrite);
 	SET_BUILTIN_FUNC("ramp", ramp);
 	SET_BUILTIN_FUNC("sam", sam);
 	SET_BUILTIN_FUNC("pow", pow);
@@ -178,8 +180,15 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("right", leftright);
 	SET_BUILTIN_FUNC("hilbert", hilbenvlope);
 	SET_BUILTIN_FUNC("envlope", hilbenvlope);
+	SET_BUILTIN_FUNC("fopen", fopen);
+	SET_BUILTIN_FUNC("fclose", fclose);
 	SET_BUILTIN_FUNC("printf", printf);
 	SET_BUILTIN_FUNC("sprintf", printf);
+	SET_BUILTIN_FUNC("fprintf", fprintf);
+	SET_BUILTIN_FUNC("fread", fread);
+	SET_BUILTIN_FUNC("fwrite", fwrite);
+	SET_BUILTIN_FUNC("write", write);
+	SET_BUILTIN_FUNC("file", file);
 	SET_BUILTIN_FUNC("json", json);
 
 	SET_BUILTIN_FUNC("clear", clear);

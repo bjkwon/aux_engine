@@ -126,7 +126,7 @@ int main(int argc, char** argv)
 	cfg.display_limit_y = 10;
 	cfg.display_precision = precision;
 	cfg.search_paths = auxpathfromenv;
-	cfg.sample_rate = DEFAULT_FS;
+	cfg.sample_rate = fs0;
 	cfg.debug_hook = console_debug_shell;
 	auxContext *ctx = aux_init(&cfg);
 	if (!ctx) {

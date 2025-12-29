@@ -583,7 +583,6 @@ public:
 		nextCSignals(lasttp, lasttp_with_silence, ghcopy);
 		return length;
 	}
-	int Wavwrite(const char *wavname, char *errstr, std::string wavformat = "");
 	uint16_t type() const
 	{
 		uint16_t out = CSignal::type();
