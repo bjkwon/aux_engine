@@ -144,6 +144,7 @@ DECL_GATE(_tseqset)
 DECL_GATE(_error_warning)
 DECL_GATE(_test)
 DECL_GATE(_str2num)
+DECL_GATE(_rend)
 
 void _fm(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _str2num(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);

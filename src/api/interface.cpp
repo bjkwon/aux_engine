@@ -15,8 +15,8 @@ struct auxContext : AuxScope {};
 
 string path_join(const vector<string>& parts); // support.cpp
 
-string show_preview(const CVar& sig, int display_precision, int display_limit_x, int display_limit_y);
-string show_preview(const AuxScope* ctx, int display_precision, int display_limit_x, int display_limit_y);
+string show_preview(const CVar& sig, int display_precision, int display_limit_x, int display_limit_y, int display_limit_bytes);
+string show_preview(const AuxScope* ctx, int display_precision, int display_limit_x, int display_limit_y, int display_limit_bytes);
 
 using namespace std;
 
@@ -81,7 +81,7 @@ int aux_eval(auxContext* ctx, const string& script, const auxConfig& cfg, string
             throw frame->emsg.c_str();
         frame->node = nodes;
         frame->Compute();
-        preview_or_error = show_preview(frame, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y);
+        preview_or_error = show_preview(frame, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
         return 0;
     } 
     catch (AuxScope* ast) {
@@ -292,7 +292,7 @@ int aux_describe_var(auxContext* ctx, const AuxObj& v, uint16_t& typeName, const
     else
     {
         typeName = asCVar(v)->type();
-        preview = show_preview(frame->Sig, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y);
+        preview = show_preview(frame->Sig, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
         return 0;
     }
 }

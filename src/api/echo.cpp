@@ -9,31 +9,31 @@
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #endif
 
-static string echo(int depth, const CVar& sig, int display_precision, int display_limit_x, int display_limit_y)
+static string echo(int depth, const CVar& sig, int display_precision, int display_limit_x, int display_limit_y, int display_limit_bytes)
 {
-	echo_object EO("", display_limit_x, display_limit_y);
+	echo_object EO("", display_limit_x, display_limit_y, display_limit_bytes);
 	EO.precision = display_precision;
 	return EO.print(sig, 0);
 }
 
 //[ 5  3 2 -1 9 83 7 62 9 7 6 8 9 7 3 2 -1]
-string show_preview(const CVar& sig, int display_precision, int display_limit_x, int display_limit_y)
+string show_preview(const CVar& sig, int display_precision, int display_limit_x, int display_limit_y, int display_limit_bytes)
 {
 	int dt = 1;
-	string out = echo(dt, sig, display_precision, display_limit_x, display_limit_y);
+	string out = echo(dt, sig, display_precision, display_limit_x, display_limit_y, display_limit_bytes);
 	return out;
 }
 
-string show_preview(const AuxScope* ctx, int display_precision, int display_limit_x, int display_limit_y)
+string show_preview(const AuxScope* ctx, int display_precision, int display_limit_x, int display_limit_y, int display_limit_bytes)
 {
 	int dt = 1;
 	string out;
 	if (ctx->SigExt.empty())
-		out = echo(dt, ctx->Sig, display_precision, display_limit_x, display_limit_y);
+		out = echo(dt, ctx->Sig, display_precision, display_limit_x, display_limit_y, display_limit_bytes);
 	else {
 		auto it = ctx->SigExt.begin();
 		while (it != ctx->SigExt.end()) {
-			out += echo(dt, it->get(), display_precision, display_limit_x, display_limit_y);
+			out += echo(dt, it->get(), display_precision, display_limit_x, display_limit_y, display_limit_bytes);
 			it++;
 		};
 	}
@@ -220,6 +220,21 @@ string echo_object::print_temporal(const string& title, const CVar& obj, int off
 	return out;
 }
 
+static void dump_hex(std::ostream& oss, const void* data, size_t nbytes) {
+	auto p = static_cast<const unsigned char*>(data);
+	// Save stream state (important for library code)
+	std::ios old_state(nullptr);
+	old_state.copyfmt(oss);
+	oss << std::hex << std::setfill('0');
+	for (size_t i = 0; i < nbytes; ++i) {
+		oss << std::setw(2)
+			<< static_cast<unsigned int>(p[i]) << ' ';
+	}
+	oss << '\n';
+	// Restore stream state
+	oss.copyfmt(old_state);
+}
+
 string echo_object::print(const CVar& obj, int offset)
 {
 	string head = "(no head)";
@@ -265,14 +280,18 @@ string echo_object::print(const CVar& obj, int offset)
 	else if (ISSTRING(tp) || ISBYTE(tp))
 	{
 //		header(head);
-		if (display_limit_x < 0) {
-			if (obj.bufType == 'S')
-				oss << "\"" << obj.str() << "\"" << postscript << endl;
-			else if (obj.bufType == 'B')
-				oss << "(" << obj.nSamples << " bytes)" << postscript << endl;
+		//if (display_limit_x < 0) {
+		ostringstream oss2;
+		if (obj.bufType == 'S')
+			oss << "\"" << obj.str() << "\"" << postscript << endl;
+		else if (obj.bufType == 'B') {
+			dump_hex(oss2, obj.buf, min(display_limit_bytes, obj.nSamples));
+			postscript = oss2.str();
+			oss << "(" << obj.nSamples << " bytes) " << postscript << endl;
 		}
-		else 
-			oss << print_vector(obj, offset);
+		//}
+		//else 
+		//	oss << print_vector(obj, offset);
 	}
 	else if (ISSCALAR(tp) || ISVECTOR(tp) || IS2D(tp))
 	{

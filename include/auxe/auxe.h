@@ -75,6 +75,7 @@ typedef struct {
     int display_precision;
     int display_limit_x;
     int display_limit_y;
+    int display_limit_bytes;
     vector<string> search_paths;
     auxDebugHook debug_hook;
 } auxConfig;

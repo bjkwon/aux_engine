@@ -373,13 +373,23 @@ void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, b
 	// Clear
 	out.Reset();
 	out.bufType = obj.bufType;
+	out.bufBlockSize = obj.bufBlockSize;
 	//allocate the output buffer
 	out.UpdateBuffer(index.nSamples);
-	if (contig)
-		memmove(out.logbuf + out.bufBlockSize * ((uint64_t)index.buf[0] - 1), obj.buf, out.bufBlockSize * obj.nSamples);
-	else
-		for (uint64_t k = 0; k < index.nSamples; k++)
-			out.buf[k] = obj.buf[(uint64_t)index.buf[k] - 1];
+	if (out.bufBlockSize == 1) {
+		if (contig)
+			memmove(out.logbuf + out.bufBlockSize * ((uint64_t)index.buf[0] - 1), obj.buf, out.bufBlockSize * obj.nSamples);
+		else
+			for (uint64_t k = 0; k < index.nSamples; k++)
+				out.strbuf[k] = obj.strbuf[(uint64_t)index.buf[k] - 1];
+	}
+	else {
+		if (contig)
+			memmove(out.logbuf + out.bufBlockSize * ((uint64_t)index.buf[0] - 1), obj.buf, out.bufBlockSize * obj.nSamples);
+		else
+			for (uint64_t k = 0; k < index.nSamples; k++)
+				out.buf[k] = obj.buf[(uint64_t)index.buf[k] - 1];
+	}
 	out.nGroups = index.nGroups;
 	if (obj.next) {
 		CSignals sec;

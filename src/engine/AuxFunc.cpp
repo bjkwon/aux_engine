@@ -190,6 +190,7 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("write", write);
 	SET_BUILTIN_FUNC("file", file);
 	SET_BUILTIN_FUNC("json", json);
+	SET_BUILTIN_FUNC("rend", rend);
 
 	SET_BUILTIN_FUNC("clear", clear);
 

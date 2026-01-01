@@ -13,14 +13,16 @@ public:
 		tbht = "";
 		display_limit_x = -1;
 		display_limit_y = -1;
+		display_limit_bytes = -1;
 	};
-	echo_object(const string& display, int display_count_x, int display_count_y) {
+	echo_object(const string& display, int _display_count_x, int _display_count_y, int _display_limit_bytes) {
 		offset = 0;
 		type = 0;
 		precision = 6;
 		tbht = display;
-		display_limit_x = display_count_x;
-		display_limit_y = display_count_y;
+		display_limit_x = _display_count_x;
+		display_limit_y = _display_count_y;
+		display_limit_bytes = _display_limit_bytes;
 	};
 	virtual ~echo_object() {};
 	int offset;
@@ -31,6 +33,7 @@ public:
 	string tbht;
 	int display_limit_x;
 	int display_limit_y;
+	int display_limit_bytes;
 	string print(const CVar& obj, int offset);
 	string print_vector(const CTimeSeries& obj, int offset);
 	string print_temporal(const string& title, const CVar& obj, int offset);

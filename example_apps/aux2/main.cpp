@@ -118,12 +118,16 @@ int main(int argc, char** argv)
 	int fs0;
 	vector<string> auxpathfromenv;
 	int precision;
-	read_auxenv(fs0, auxpathfromenv, precision, AUXENV_FILE);
+	if (!read_auxenv(fs0, auxpathfromenv, precision, AUXENV_FILE)) {
+		fs0 = DEFAULT_FS;
+		precision = PRECISION;
+	}
 	if (fs0 == 0) fs0 = DEFAULT_FS;
 	if (precision == 0) precision = PRECISION;
 
 	cfg.display_limit_x = 10;
 	cfg.display_limit_y = 10;
+	cfg.display_limit_bytes = 256;
 	cfg.display_precision = precision;
 	cfg.search_paths = auxpathfromenv;
 	cfg.sample_rate = fs0;

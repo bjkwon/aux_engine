@@ -1,4 +1,5 @@
 #include "functions_common.h"
+#include <sstream>
 
 Cfunction set_builtin_function_veq(fGate fp)
 {
@@ -33,6 +34,27 @@ Cfunction set_builtin_function_datatype(fGate fp)
 	vector<CVar> default_arg = { };
 	set<uint16_t> allowedTypes1 = { 0xFFFF }; // accepting all
 	ft.allowed_arg_types.push_back(allowedTypes1);
+	// til this line ==============
+	ft.defaultarg = default_arg;
+	ft.narg1 = desc_arg_req.size();
+	ft.narg2 = ft.narg1 + default_arg.size();
+	return ft;
+}
+
+Cfunction set_builtin_function_rend(fGate fp)
+{
+	Cfunction ft;
+	set<uint16_t> allowedTypes;
+	ft.func = fp;
+	// Edit from this line ==============
+	ft.alwaysstatic = false;
+	vector<string> desc_arg_req = { "object", "format"};
+	vector<string> desc_arg_opt = {  };
+	vector<CVar> default_arg = { };
+	set<uint16_t> allowedTypes1 = { TYPEBIT_BYTE + 1, TYPEBIT_BYTE + 2, };
+	ft.allowed_arg_types.push_back(allowedTypes1);
+	set<uint16_t> allowedTypes2 = { TYPEBIT_STRING + 1, TYPEBIT_STRING + 2, };
+	ft.allowed_arg_types.push_back(allowedTypes2);
 	// til this line ==============
 	ft.defaultarg = default_arg;
 	ft.narg1 = desc_arg_req.size();
@@ -112,3 +134,110 @@ void _veq(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	}
 }
 
+template <class T>
+static T read_unaligned(const uint8_t*& p) {
+	T v;
+	std::memcpy(&v, p, sizeof(T));
+	p += sizeof(T);
+	return v;
+}
+
+static std::vector<double> read_values_as_double(const uint8_t*& p,
+	const std::string& type,
+	size_t byte_count)
+{
+	std::vector<double> out;
+
+	auto require_multiple = [&](size_t sz) {
+		if (byte_count % sz != 0) {
+			throw std::runtime_error(
+				"Byte count not aligned with element size for type '" + type + "'");
+		}
+		return byte_count / sz;
+	};
+
+	if (type == "int8") {
+		size_t n = require_multiple(sizeof(int8_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<int8_t>(p)));
+	}
+	else if (type == "int16") {
+		size_t n = require_multiple(sizeof(int16_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<int16_t>(p)));
+	}
+	else if (type == "int32") {
+		size_t n = require_multiple(sizeof(int32_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<int32_t>(p)));
+	}
+	else if (type == "int64") {
+		size_t n = require_multiple(sizeof(int64_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<int64_t>(p)));
+	}
+	else if (type == "uint8") {
+		size_t n = require_multiple(sizeof(uint8_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<uint8_t>(p)));
+	}
+	else if (type == "uint16") {
+		size_t n = require_multiple(sizeof(uint16_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<uint16_t>(p)));
+	}
+	else if (type == "uint32") {
+		size_t n = require_multiple(sizeof(uint32_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<uint32_t>(p)));
+	}
+	else if (type == "uint64") {
+		size_t n = require_multiple(sizeof(uint64_t));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<uint64_t>(p)));
+	}
+	else if (type == "float") {
+		size_t n = require_multiple(sizeof(float));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(static_cast<double>(read_unaligned<float>(p)));
+	}
+	else if (type == "double") {
+		size_t n = require_multiple(sizeof(double));
+		out.reserve(n);
+		for (size_t i = 0; i < n; ++i)
+			out.push_back(read_unaligned<double>(p));
+	}
+	else {
+		throw std::invalid_argument(
+			"read_values_as_double: unsupported type '" + type + "'");
+	}
+
+	return out;
+}
+
+void _rend(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
+{
+	CVar arg = args.front();
+	string param = arg.str();
+	if (param=="str")
+		past->Sig.bufType = 'S';
+	else {
+		const uint8_t* p = reinterpret_cast<const uint8_t*>(past->Sig.strbuf);
+		vector<double> content_read = read_values_as_double(p, param, past->Sig.nSamples);
+		CVar out(1);
+		out.UpdateBuffer(content_read.size());
+		uint64_t k = 0;
+		for (auto v : content_read)
+			out.buf[k++] = v;
+		past->Sig = out;
+	}
+}

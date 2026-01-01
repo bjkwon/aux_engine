@@ -200,10 +200,10 @@ void appcontrol(auxContext* ctx, int precision, const string& cmd)
 		}
 
 	}
-
 }
+#define AUXENV_FILE "auxenv.json"
 
-void read_auxenv(int& fs0, vector<string>& auxpathfromenv, int& precision, const string& envfilename)
+int read_auxenv(int& fs0, vector<string>& auxpathfromenv, int& precision, const string& envfilename)
 {
 	ifstream envfstream;
 	json jenv;
@@ -231,6 +231,7 @@ void read_auxenv(int& fs0, vector<string>& auxpathfromenv, int& precision, const
 				}
 			}
 		}
+		return 1;
 	}
 	catch (const string& fname) {
 		cout << "Environment file not found--- " << fname << endl;
@@ -241,6 +242,7 @@ void read_auxenv(int& fs0, vector<string>& auxpathfromenv, int& precision, const
 	catch (json::type_error e) {
 		cout << e.what() << endl;
 	}
+	return 0;
 }
 
 void save_auxenv(auxContext* ctx, int display_precision, const string& envfilename)
