@@ -226,18 +226,30 @@ static std::vector<double> read_values_as_double(const uint8_t*& p,
 
 void _rend(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
+	string estr;
 	CVar arg = args.front();
 	string param = arg.str();
 	if (param=="str")
 		past->Sig.bufType = 'S';
 	else {
-		const uint8_t* p = reinterpret_cast<const uint8_t*>(past->Sig.strbuf);
-		vector<double> content_read = read_values_as_double(p, param, past->Sig.nSamples);
-		CVar out(1);
-		out.UpdateBuffer(content_read.size());
-		uint64_t k = 0;
-		for (auto v : content_read)
-			out.buf[k++] = v;
-		past->Sig = out;
+		try {
+			const uint8_t* p = reinterpret_cast<const uint8_t*>(past->Sig.strbuf);
+			vector<double> content_read = read_values_as_double(p, param, past->Sig.nSamples);
+			CVar out(1);
+			out.UpdateBuffer(content_read.size());
+			uint64_t k = 0;
+			for (auto v : content_read)
+				out.buf[k++] = v;
+			past->Sig = out;
+		}
+		catch (const std::runtime_error& e) {
+			estr = e.what();
+			throw exception_etc(past, pnode, estr).raise();
+		}
+		catch (const std::invalid_argument& e) {
+			estr = e.what();
+			estr += "accepted types are int8, int16, int32, uint8, uint16, uint32, float, double, or str.";
+			throw exception_etc(past, pnode, estr).raise();
+		}
 	}
 }

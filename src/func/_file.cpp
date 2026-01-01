@@ -637,7 +637,7 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	past->Sig.bufType = 'R';
 	size_t id1 = (size_t)(beginMs / 1000.f * wavinfo.sample_rate + .5);
 	FILE* fp = fopen(filename.c_str(), "rb"); // most likely success
-	res = fseek(fp, res + id1 * wavinfo.block_align * wavinfo.num_channels, SEEK_SET);
+	res = fseek(fp, res + id1 * wavinfo.block_align, SEEK_SET);
 	int _frames2read;
 	size_t frames = wavinfo.data_size / wavinfo.block_align;
 	if (durMs < 0)
