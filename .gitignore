@@ -1,0 +1,22 @@
+# CMake
+build/
+install/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Visual Studio
+.vs/
+x64/
+Debug/
+Release
+*.vcxproj.user
+*.suo
+
+# Editors
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
