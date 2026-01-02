@@ -186,6 +186,7 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("sprintf", printf);
 	SET_BUILTIN_FUNC("fprintf", fprintf);
 	SET_BUILTIN_FUNC("fread", fread);
+	SET_BUILTIN_FUNC("filepointer", filepointer);
 	SET_BUILTIN_FUNC("fwrite", fwrite);
 	SET_BUILTIN_FUNC("write", write);
 	SET_BUILTIN_FUNC("file", file);

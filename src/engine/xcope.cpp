@@ -45,6 +45,7 @@ AuxScope::~AuxScope()
 EngineRuntime::EngineRuntime(const int fs)
 	: Fs(fs), curLine(-1), inTryCatch(0)
 {
+	nextFD = 1;
 	version = AUXCORE_VERSION;
 	shutdown = false;
 	if (fs < 0)	throw "Internal error: Fs must be greater than 1.";
@@ -1962,6 +1963,7 @@ EngineRuntime& EngineRuntime::operator=(const EngineRuntime& rhs)
 		udf = rhs.udf;
 		shutdown = rhs.shutdown;
 		glovar = rhs.glovar;
+		nextFD = rhs.nextFD;
 	}
 	return *this;
 }

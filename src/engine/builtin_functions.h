@@ -76,13 +76,6 @@ Add to builtin_functions.h
 * TYPEBIT_SIZE1 + TYPEBIT_FS2 string
 */
 
-//these functions are defined in _file.cpp
-void _fopen(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
-void _fclose(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
-void _fprintf(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
-void _fread(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
-void _fwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
-void _write(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 DECL_GATE(_wavwrite)
 DECL_GATE(_wave)
 void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
@@ -185,6 +178,7 @@ DECL_GATE(_fopen)
 DECL_GATE(_fclose)
 DECL_GATE(_fwrite)
 DECL_GATE(_fread)
+DECL_GATE(_filepointer)
 DECL_GATE(_write)
 DECL_GATE(_file)
 DECL_GATE(_json)

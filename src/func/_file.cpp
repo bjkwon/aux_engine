@@ -105,7 +105,7 @@ Cfunction set_builtin_function_fclose(fGate fp)
 	vector<string> desc_arg_req = { "FILE_ID" };
 	vector<string> desc_arg_opt = { };
 	vector<CVar> default_arg = { };
-	set<uint16_t> allowedTypes1 = { TYPEBIT_BYTE + 2};
+	set<uint16_t> allowedTypes1 = { 1};
 	ft.allowed_arg_types.push_back(allowedTypes1);
 	// til this line ==============
 	ft.desc_arg_req = desc_arg_req;
@@ -126,10 +126,31 @@ Cfunction set_builtin_function_fread(fGate fp)
 	vector<string> desc_arg_opt = { "additional_arg"};
 	vector<CVar> default_arg = { CVar(string("")) };
 	ft.defaultarg = default_arg;
-	set<uint16_t> allowedTypes1 = { TYPEBIT_BYTE + 2 };
+	set<uint16_t> allowedTypes1 = { 1, };
+	set<uint16_t> allowedTypes2 = { TYPEBIT_STRING + 1, TYPEBIT_STRING + 2, };
 	ft.allowed_arg_types.push_back(allowedTypes1);
-	set<uint16_t> allowedTypes2 = { TYPEBIT_STRING, TYPEBIT_STRING + 1, TYPEBIT_STRING + 2, };
 	ft.allowed_arg_types.push_back(allowedTypes2);
+	ft.allowed_arg_types.push_back(allowedTypes2);
+	ft.desc_arg_req = desc_arg_req;
+	ft.desc_arg_opt = desc_arg_opt;
+	ft.narg1 = desc_arg_req.size();
+	ft.narg2 = ft.narg1 + default_arg.size();
+	return ft;
+}
+
+Cfunction set_builtin_function_filepointer(fGate fp)
+{
+	Cfunction ft;
+	set<uint16_t> allowedTypes;
+	ft.func = fp;
+	ft.alwaysstatic = false;
+	vector<string> desc_arg_req = { "FILE_ID",  };
+	vector<string> desc_arg_opt = { "file_pointer" };
+	vector<CVar> default_arg = { CVar(), };
+	ft.defaultarg = default_arg;
+	set<uint16_t> allowedTypes1 = { 1, };
+	ft.allowed_arg_types.push_back(allowedTypes1);
+	set<uint16_t> allowedTypes2 = { 1, };
 	ft.allowed_arg_types.push_back(allowedTypes2);
 	ft.desc_arg_req = desc_arg_req;
 	ft.desc_arg_opt = desc_arg_opt;
@@ -148,7 +169,7 @@ Cfunction set_builtin_function_fwrite(fGate fp)
 	vector<string> desc_arg_opt = { "additional_arg" };
 	vector<CVar> default_arg = { CVar(string("")) };
 	ft.defaultarg = default_arg;
-	set<uint16_t> allowedTypes1 = { TYPEBIT_BYTE + 2 };
+	set<uint16_t> allowedTypes1 = { 1, };
 	ft.allowed_arg_types.push_back(allowedTypes1);
 	set<uint16_t> allowedTypes2 = { 0xFFFF }; // accepting all
 	ft.allowed_arg_types.push_back(allowedTypes2);
@@ -204,6 +225,36 @@ static inline bool isnumeric(const char* buf)
 	return true;
 }
 
+class FileOpenGuard {
+public:
+	explicit FileOpenGuard(uint64_t fd, EngineRuntime* pEnv) : pos(-1) {
+		if (!fd) {
+			throw std::invalid_argument("FILE* is null");
+		}
+
+		auto it = pEnv->fileTable.find(fd);
+		if (it == pEnv->fileTable.end() || !it->second.open) {
+			throw std::runtime_error("Invalid or closed file descriptor");
+		}
+		fp = it->second.fp;
+		pos = ftell(fp);
+		if (pos == -1L) {
+			throw std::runtime_error("ftell failed");
+		}
+
+	}
+	FILE* fp;
+
+	~FileOpenGuard() {
+		if (fp && pos != -1L) {
+			fseek(fp, pos, SEEK_SET); // best-effort restore
+		}
+	}
+
+private:
+	long  pos;
+};
+
 static void EnumAudioVariables(AuxScope* past, vector<string>& var)
 {
 	var.clear();
@@ -222,24 +273,35 @@ void _fopen(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	}
 	else
 	{
-		past->Sig.Reset(2);
-		past->Sig.strbuf = new char[sizeof(uint64_t)];
-		memcpy(past->Sig.buf, &fl, sizeof(uint64_t));
-		past->Sig.nSamples = sizeof(uint64_t);
-		past->Sig.bufType = 'B';
+		past->Sig.Reset(1);
+		past->Sig.UpdateBuffer(1);
+		uint64_t fd = past->pEnv->nextFD++;
+		past->pEnv->fileTable[fd] = FileEntry{ fl, true };
+		past->Sig.SetValue((auxtype)fd);
 	}
 }
 
 void _fclose(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
-	auto fp = (FILE*)*(uint64_t*)past->Sig.buf;
-	if (fclose(fp) == EOF)
-	{
-		past->Sig.SetValue(-1.);
-	}
-	else
-	{
+	try {
+		auto fd = (uint64_t)past->Sig.value();
+		FileOpenGuard fog(fd, past->pEnv);
+
 		past->Sig.SetValue(0);
+		if (fclose(fog.fp)== EOF) {
+			past->Sig.SetValue(-1.);
+		}
+		else {
+			auto it = past->pEnv->fileTable.find(fd);
+			it->second.fp = nullptr;
+			it->second.open = false;
+		}
+	}
+	catch (const std::invalid_argument&) {
+		throw ;
+	}
+	catch (const std::runtime_error&) {
+		throw ;
 	}
 }
 
@@ -259,7 +321,10 @@ static FILE* prepare_freadwrite(AuxScope* past, const AstNode* pnode, const vect
 	//second arg is the signal to write to file
 	//third arg is precision--one of the following: int8 int16 int32 uint8 uint16 uint32 char float double
 
-	auto fp = (FILE*)*(uint64_t*)past->Sig.buf;
+	auto fd = (uint64_t)past->Sig.value();
+	FileOpenGuard fog(fd, past->pEnv);
+	FILE* fp = fog.fp;
+
 	string fname = pnode->str;
 	auto arg = args.begin();
 	if (fname == "fwrite") arg++;
@@ -335,172 +400,238 @@ size_t fwrite_general(T var, const CVar& sig, string prec, FILE* file, int bytes
 // Likewise, fread with double may succeed, but the data is stored in the float buffer
 void _fwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
-	CVar firstarg = args[0];
-	int bytes;
-	string prec;
-	size_t res=-1;
-	FILE* file = prepare_freadwrite(past, pnode, args, bytes, prec, NULL);
-	const CVar* pobj = NULL;
-	auto tp = args[0].type();
-	if (ISAUDIO(tp))
-	{
-		if (tp & TYPEBIT_TEMPO_CHAINS || (tp & TYPEBIT_TEMPO_ONE && args[0].tmark > 0))
+	try {
+		CVar firstarg = args[0];
+		int bytes;
+		string prec;
+		size_t res = -1;
+		FILE* file = prepare_freadwrite(past, pnode, args, bytes, prec, NULL);
+		const CVar* pobj = NULL;
+		auto tp = args[0].type();
+		if (ISAUDIO(tp))
 		{
-			CVar copy = args[0];
-			copy.MakeChainless();
-			pobj = &copy;
+			if (tp & TYPEBIT_TEMPO_CHAINS || (tp & TYPEBIT_TEMPO_ONE && args[0].tmark > 0))
+			{
+				CVar copy = args[0];
+				copy.MakeChainless();
+				pobj = &copy;
+			}
 		}
-	}
-	if (!pobj) pobj = &args[0];
-	if (prec == "void" || prec == "byte")
-	{
-		res = fwrite(args[0].buf, 1, args[0].nSamples, file);
-	}
-	else if (prec == "char") 
-	{
-		if (pobj->IsString())
-			res = fwrite(pobj->strbuf, 1, pobj->nSamples, file);
-		else
+		if (!pobj) pobj = &args[0];
+		if (prec == "void" || prec == "byte")
 		{
-			char temp = 0;
+			res = fwrite(args[0].buf, 1, args[0].nSamples, file);
+		}
+		else if (prec == "char")
+		{
+			if (pobj->IsString())
+				res = fwrite(pobj->strbuf, 1, pobj->nSamples, file);
+			else
+			{
+				char temp = 0;
+				res = fwrite_general(temp, *pobj, prec, file, bytes, 0x100);
+			}
+		}
+		else if (prec == "int8")
+		{
+			int8_t temp = 0;
+			res = fwrite_general(temp, *pobj, prec, file, bytes, 0x80);
+		}
+		else if (prec == "uint8")
+		{
+			uint8_t temp = 0;
 			res = fwrite_general(temp, *pobj, prec, file, bytes, 0x100);
 		}
+		else if (prec == "int16")
+		{
+			int16_t temp = 0;
+			res = fwrite_general(temp, *pobj, prec, file, bytes, 0x8000);
+		}
+		else if (prec == "uint16")
+		{
+			uint16_t temp = 0;
+			res = fwrite_general(temp, *pobj, prec, file, bytes, 0x10000);
+		}
+		//else if (prec == "int24")
+		//{
+		//	int32_t temp = 0; // in24_t doesn't exist
+		//	res = fwrite_general(temp, *pobj, prec, file, bytes, 0x800000);
+		//}
+		else if (prec == "int32")
+		{
+			int32_t temp = 0;
+			res = fwrite_general(temp, *pobj, prec, file, bytes, 0x80000000);
+		}
+		else if (prec == "uint32")
+		{
+			uint32_t temp = 0;
+			res = fwrite_general(temp, *pobj, prec, file, bytes, 0xffffffff);
+		}
+		else if (prec == "float")
+		{ // No automatic scaling
+			float temp = 0;
+			res = fwrite_general_floating(temp, *pobj, prec, file);
+		}
+		else if (prec == "double")
+		{ // No automatic scaling
+			double temp = 0;
+			res = fwrite_general_floating(temp, *pobj, prec, file);
+		}
+		past->Sig.SetValue((float)res);
 	}
-	else if (prec == "int8")
-	{
-		int8_t temp = 0;
-		res = fwrite_general(temp, *pobj, prec, file, bytes, 0x80);
+	catch (const std::invalid_argument&) {
+		throw;
 	}
-	else if (prec == "uint8")
-	{
-		uint8_t temp = 0;
-		res = fwrite_general(temp, *pobj, prec, file, bytes, 0x100);
+	catch (const std::runtime_error&) {
+		throw;
 	}
-	else if (prec == "int16")
-	{
-		int16_t temp = 0;
-		res = fwrite_general(temp, *pobj, prec, file, bytes, 0x8000);
-	}
-	else if (prec == "uint16")
-	{
-		uint16_t temp = 0;
-		res = fwrite_general(temp, *pobj, prec, file, bytes, 0x10000);
-	}
-	//else if (prec == "int24")
-	//{
-	//	int32_t temp = 0; // in24_t doesn't exist
-	//	res = fwrite_general(temp, *pobj, prec, file, bytes, 0x800000);
-	//}
-	else if (prec == "int32")
-	{
-		int32_t temp = 0;
-		res = fwrite_general(temp, *pobj, prec, file, bytes, 0x80000000);
-	}
-	else if (prec == "uint32")
-	{
-		uint32_t temp = 0;
-		res = fwrite_general(temp, *pobj, prec, file, bytes, 0xffffffff);
-	}
-	else if (prec == "float")
-	{ // No automatic scaling
-		float temp = 0;
-		res = fwrite_general_floating(temp, *pobj, prec, file);
-	}
-	else if (prec == "double")
-	{ // No automatic scaling
-		double temp = 0;
-		res = fwrite_general_floating(temp, *pobj, prec, file);
-	}
-	past->Sig.SetValue((float)res);
 }
 
 template<typename T>
-void fread_general(T var, CVar& sig, FILE* file, int bytes, char* addarg, uint64_t factor)
+size_t fread_general(T var, CVar& sig, FILE* file, int bytes, char* addarg, uint64_t factor)
 {
-	T* pvar = &var;
-	if (!strcmp(addarg, "audio") || !strcmp(addarg, "a"))
-		for_each(sig.buf, sig.buf + sig.nSamples,
-			[pvar, bytes, file, factor](auxtype& v) { fread(pvar, bytes, 1, file); v = *pvar / (auxtype)factor; });
-	else if (!strcmp(addarg, "audio2") || !strcmp(addarg, "a2"))
-	{
-		int k = 0;
-		CSignals next(CSignal(sig.GetFs(), sig.nSamples));
-		sig.SetNextChan(next);
-		auxtype* buf2 = sig.next->buf;
-		for_each(sig.buf, sig.buf + sig.nSamples,
-			[buf2, pvar, bytes, file, factor, &k](auxtype& v) {
-				fread(pvar, bytes, 1, file); v = *pvar / (auxtype)factor;
-				fread(pvar, bytes, 1, file); buf2[k++] = *pvar / (auxtype)factor; });
-	}
-	else
-		for_each(sig.buf, sig.buf + sig.nSamples,
-			[pvar, bytes, file](auxtype& v) { fread(pvar, bytes, 1, file); v = *pvar; });
-}
+	// If you want to enforce "bytes matches T", uncomment:
+	// if (bytes != (int)sizeof(T)) throw std::invalid_argument("bytes != sizeof(T)");
 
+	T* pvar = &var;
+	size_t nread = 0;
+	for (size_t i = 0; i < (size_t)sig.nSamples; ++i)
+	{
+		size_t got = std::fread(pvar, (size_t)bytes, 1, file);
+		if (got == 1) {
+			sig.buf[i] = static_cast<auxtype>(*pvar); // or your factor logic if needed
+			++nread;
+			continue;
+		}
+		// got == 0 => EOF or error
+		if (std::ferror(file)) {
+			int e = errno;
+			std::ostringstream oss;
+			oss << "fread failed at item " << i
+				<< " (requested bytes=" << bytes << "). "
+				<< (e ? std::strerror(e) : "I/O error");
+			throw std::runtime_error(oss.str());
+		}
+		// Not an I/O error => EOF / truncated input
+		break;
+	}
+	return nread;
+}
+/* precision is C-type precision
+* additional arguments specify how many elements to skip and how many elements are read. Actual bytes according to the precision
+* examples:
+*   fd.fread("int32", 4); // only read 4 elements from the current position
+* (NOTE) the second argument being "audio2" or "a2" no longer supported 1/1/2026
+*/
 void _fread(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	int bytes;
 	string prec;
+	ostringstream oss;
 	char addarg[16] = {};
-	FILE* file = prepare_freadwrite(past, pnode, args, bytes, prec, addarg);
+	try {
+		FILE* fp = prepare_freadwrite(past, pnode, args, bytes, prec, addarg);
 
-	auto res = fseek(file, 0L, SEEK_END);
-	size_t sz = ftell(file);
-	res = fseek(file, 0L, SEEK_SET);
-
-	size_t nItems = sz / bytes;
-	if (prec == "char" || prec == "byte" || prec == "void")
-	{ // Treat it separately just to make the code neat.
-		past->Sig.SetString('\0');
+		auto res = fseek(fp, 0L, SEEK_END);
+		if (res != 0) {
+			oss << "fseek failed, return code= " << res << ", (file might have been closed).";
+			throw std::runtime_error(oss.str());
+		}
+		size_t sz = ftell(fp);
+		if (sz == -1) {
+			oss << "ftell failed, return code= " << sz << ", (file might have been closed).";
+			throw std::runtime_error(oss.str());
+		}
+		res = fseek(fp, 0L, SEEK_SET);
+		if (res != 0) {
+			oss << "fseek failed, return code= " << res << ", (file might have been closed).";
+			throw std::runtime_error(oss.str());
+		}
+		size_t nItems = sz / bytes;
+		if (prec == "char" || prec == "byte" || prec == "void")
+		{ // Treat it separately just to make the code neat.
+			past->Sig.SetString('\0');
+			past->Sig.UpdateBuffer((unsigned int)nItems);
+			fread(past->Sig.strbuf, bytes, nItems, fp);
+			if (prec == "byte" || prec == "void") past->Sig.bufType = 'B';
+			return;
+		}
+		past->Sig.Reset(1); // always make it non-audio
 		past->Sig.UpdateBuffer((unsigned int)nItems);
-		fread(past->Sig.strbuf, bytes, nItems, file);
-		if (prec == "byte" || prec == "void") past->Sig.bufType = 'B';
-		return;
+		if (prec == "int8" || prec == "uint8")
+		{
+			int8_t temp = 0;
+			fread_general(temp, past->Sig, fp, bytes, addarg, 0x80);
+		}
+		else if (prec == "int16" || prec == "uint16")
+		{
+			int16_t temp = 0;
+			fread_general(temp, past->Sig, fp, bytes, addarg, 0x8000);
+		}
+		else if (prec == "int24")
+		{
+			int32_t temp = 0; // in24_t doesn't exist
+			fread_general(temp, past->Sig, fp, bytes, addarg, 0x80000000); // check
+		}
+		else if (prec == "int32" || prec == "uint32")
+		{
+			int32_t temp = 0;
+			fread_general(temp, past->Sig, fp, bytes, addarg, 0x80000000);
+		}
+		else if (prec == "float")
+		{
+			float temp = 0.;
+			fread_general(temp, past->Sig, fp, bytes, addarg, 1);
+		}
+		else if (prec == "double")
+		{
+			double temp = 0.;
+			fread_general(temp, past->Sig, fp, bytes, addarg, 1);
+		}
 	}
-	past->Sig.Reset(1); // always make it non-audio
-	if (!strcmp(addarg, "audio2") || !strcmp(addarg, "a2"))
-	{
-		if (nItems / 2 * 2 != nItems)
-			throw exception_etc( *past, pnode, "attempting to read stereo audio data but data count is not even.").raise();
-		nItems /= 2;
+	catch (const std::invalid_argument&) {
+		throw;
 	}
-	past->Sig.UpdateBuffer((unsigned int)nItems);
-	if (!strcmp(addarg, "audio") || !strcmp(addarg, "a") || !strcmp(addarg, "audio2") || !strcmp(addarg, "a2"))
-		past->Sig.SetFs(past->pEnv->Fs);
-	if (prec == "int8" || prec == "uint8")
-	{
-		int8_t temp = 0;
-		fread_general(temp, past->Sig, file, bytes, addarg, 0x80);
+	catch (const std::runtime_error&) {
+		throw;
 	}
-	else if (prec == "int16" || prec == "uint16")
-	{
-		int16_t temp = 0;
-		fread_general(temp, past->Sig, file, bytes, addarg, 0x8000);
-	}
-	else if (prec == "int24")
-	{
-		int32_t temp = 0; // in24_t doesn't exist
-		fread_general(temp, past->Sig, file, bytes, addarg, 0x80000000); // check
-	}
-	else if (prec == "int32" || prec == "uint32")
-	{
-		int32_t temp = 0;
-		fread_general(temp, past->Sig, file, bytes, addarg, 0x80000000);
-	}
-	else if (prec == "float")
-	{
-		float temp = 0.;
-		fread_general(temp, past->Sig, file, bytes, addarg, 1);
-	}
-	else if (prec == "double")
-	{
-		double temp = 0.;
-		fread_general(temp, past->Sig, file, bytes, addarg, 1);
-	}
-	if (!strcmp(addarg, "audio") || !strcmp(addarg, "a") | !strcmp(addarg, "audio2") || !strcmp(addarg, "a2"))
-		past->Sig.SetFs(past->pEnv->Fs);
 }
 
+// fd.filepointer() // tell me where the file pointer is
+// fd.filepointer(4) // go forward 4 bytes from the current file pointer
+void _filepointer(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
+{
+	try {
+		ostringstream oss;
+		string estr;
+		auto fd = (uint64_t)past->Sig.value();
+		FileOpenGuard fog(fd, past->pEnv);
+		FILE* fp = fog.fp;
+		if (args.empty()) {
+			size_t sz = ftell(fp);
+			if (sz == -1) {
+				oss << "ftell failed, return code= " << sz << ", (file might have been closed).";
+				throw std::runtime_error(oss.str());
+			}
+			past->Sig.SetValue((auxtype)sz);
+		}
+		else {
+			size_t skip = (size_t)args[0].value();
+			auto res = fseek(fp, skip, SEEK_CUR);
+			if (res != 0) {
+				oss << "fseek failed, return code= " << res << ", (file might have been closed).";
+				throw std::runtime_error(oss.str());
+			}
+			past->Sig.SetValue(0.);
+		}
+	}
+	catch (const std::invalid_argument&) {
+		throw;
+	}
+	catch (const std::runtime_error&) {
+		throw;
+	}
+}
 
 static void write2textfile(FILE* fid, CVar* psig)
 {
@@ -541,7 +672,6 @@ void _wavwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	string option = args[1].str();
 
 	string fullfilename = past->makefullfile(filename, ".wav");
-	char errStr[256];
 	past->Sig.MakeChainless();
 
 	// As of 12/27/2025, write only in PCM16sle format
@@ -710,12 +840,10 @@ static int filetype(const string& fname, string& errstr)
 
 void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
-	char errStr[16];
 	string filename = past->Sig.str();
 	string errstr, content;
 	int res = filetype(filename, errstr);
-	int ret, fs, nChans;
-	size_t len, nLines;
+	size_t nLines;
 	switch (res)
 	{
 	case 1:

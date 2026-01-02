@@ -137,6 +137,11 @@ public:
 	void(*func)(AuxScope*, const AstNode*, const vector<CVar>&);
 };
 
+struct FileEntry {
+	FILE* fp;
+	bool open;
+};
+
 class EngineRuntime
 {
 public:
@@ -145,6 +150,8 @@ public:
 	static map<string, Cfunction> pseudo_vars;
 	DebugHook debug_hook;
 	map<string, UDF> udf;
+	unordered_map<uint64_t, FileEntry> fileTable;
+	uint64_t nextFD = 1;
 	int Fs;
 	int curLine; // used for control F10
 	int inTryCatch;

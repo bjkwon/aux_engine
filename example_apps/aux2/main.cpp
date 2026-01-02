@@ -204,6 +204,9 @@ int main(int argc, char** argv)
 			catch (const char* msg) {
 				cout << "Error: " << msg << endl;
 			}
+			catch (const std::exception& e) {
+				std::cout << "Error: " << e.what() << "\n";
+			}
 		}
 	}
 	else {
@@ -227,6 +230,9 @@ int main(int argc, char** argv)
 		//}
 		catch (const char* msg) {
 			cout << "Error: " << msg << endl;
+		}
+		catch (const std::exception& e) {
+			std::cout << "Error: " << e.what() << "\n";
 		}
 	}
 	save_auxenv(ctx, cfg.display_precision, AUXENV_FILE);
