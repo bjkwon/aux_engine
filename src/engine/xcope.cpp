@@ -120,12 +120,13 @@ EngineRuntime::EngineRuntime(const int fs)
 	type_blockflow.push_back(T_CATCH);
 	type_blockflow.push_back(T_CATCHBACK);
 	type_blockflow.push_back(N_BLOCK);
-	
 }
 
 EngineRuntime::~EngineRuntime()
 {
-
+	for (auto it = fileTable.begin(); it != fileTable.end(); it++) {
+		if ((*it).second.open) fclose((*it).second.fp);
+	}
 }
 
 void AuxScope::outputbinding_for_eval_lhs(const AstNode* plhs)
@@ -541,7 +542,7 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 		if (!(pres = GetVariable(ptree->str, ptree, *psigBase)))
 		{
 			AstNode* t_func;
-			if ((t_func = ReadUDF(emsg, ptree->str)))
+			if ((t_func = ReadUDF(emsg, string(ptree->str))))
 			{
 				if (ptree->child)	throw_LHS_lvalue(ptree, true);
 				// if static function, psigBase must be NULL
@@ -921,11 +922,11 @@ multimap<CVar, AstNode*> AuxScope::register_switch_cvars(const AstNode* pnode, v
 	return  out;
 }
 
-AstNode* AuxScope::ReadUDF(string& emsg, const char* udf_filename)
+AstNode* AuxScope::ReadUDF(string& emsg, const string& udf_filename)
 {
 	// returns node for the UDF, if it exists.
-	if (!udf_filename) return NULL;
-	if (strlen(udf_filename) > 255) return NULL; //MR 1
+	if (udf_filename.empty()) return NULL;
+	if (udf_filename.size() > 255) return NULL; //MR 1
 	emsg.clear();
 	AstNode* pout;
 	if (pEnv->udf.empty())

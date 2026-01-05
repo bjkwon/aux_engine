@@ -85,7 +85,7 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 		cout << res << endl;
 		break;
 	}
-	return auxDebugAction::NoDebug;
+	return auxDebugAction::AUX_DEBUG_NO_DEBUG;
 }
 
 // While debugging in progress, 
@@ -101,15 +101,15 @@ auxDebugAction console_debug_shell(const auxDebugInfo& ev) {
 	bool programExit = false;
 	while (1) {
 		// Think about how to display the udfname
-//		cout << ev.node->str << " " << ev.line << "> ";
+		cout << ev.filename << " " << ev.line << "> ";
 		getline(cin, input);
 		if (!input.empty()) {
 			auto res = interpreter(ev.ctx, 3, input, true);
-			if (res != auxDebugAction::NoDebug)
+			if (res != auxDebugAction::AUX_DEBUG_NO_DEBUG)
 				return res;
 		}
 	}
-	return auxDebugAction::Continue;
+	return auxDebugAction::AUX_DEBUG_CONTINUE;
 }
 
 int main(int argc, char** argv)

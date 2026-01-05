@@ -29,18 +29,19 @@ typedef struct auxContext auxContext;
 struct _AuxObj;
 using AuxObj = const _AuxObj*;
 
+
 enum class auxDebugAction {
-    NoDebug = -1,
-    Continue = 0,
-    Step,
-    StepOut,
-    StepIn,
-    AbortToBase
+    AUX_DEBUG_NO_DEBUG = -1,
+    AUX_DEBUG_CONTINUE = 0,
+    AUX_DEBUG_STEP,
+    AUX_DEBUG_STEP_OUT,
+    AUX_DEBUG_STEP_IN,
+    AUX_DEBUG_ABORT_BASE
 };
 
 struct auxDebugInfo {
     auxContext* ctx;   // current context / frame
-  //  const AstNode* node;    // where we stopped
+    string filename;
     int line;          // current line number in UDF (or -1 if unknown)
 };
 
@@ -113,3 +114,5 @@ AUXE_API int aux_add_udfpath(auxContext* ctx, const string& udfpath);
 
 AUXE_API vector<string> aux_enum_vars(auxContext* ctx);
 AUXE_API auxDebugAction aux_handle_debug_key(auxContext* ctx, const string& instr);
+
+AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname);

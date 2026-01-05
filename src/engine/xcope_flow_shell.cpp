@@ -121,14 +121,11 @@ void AuxScope::hold_at_break_point(const AstNode* pnode)
 {
 	// if the current line is one of breakpoints
 	// if currently stepping
-	if (isItBreakPoint(pEnv->udf[u.title].DebugBreaks, pnode->line) ||
-		u.debugstatus == step ||
-		u.debugstatus == step_in
-		)
+	if (isItBreakPoint(pEnv->udf[u.title].DebugBreaks, pnode->line)	)
 	{
 		if (u.debugstatus == step_in)  u.debugstatus = progress;
 		if (pEnv->debug_hook) {
-			DebugEvent ev{ this, pnode, pnode->line };
+			DebugEvent ev{ this, u.title, pnode->line};
 			DebugAction action = pEnv->debug_hook(ev);
 
 			switch (action) {

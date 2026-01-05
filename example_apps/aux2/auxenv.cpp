@@ -158,32 +158,36 @@ void appcontrol(auxContext* ctx, int precision, const string& cmd)
 		}
 		else {
 			auto udfname = parsed[1];
-//			if (1) // if udfname is not a registered udf
-//			if (pEnv->udf.find(p->str) == pEnv->udf.end())
-			auto pt = cmd.find(udfname);
-			auto rest_str = cmd.substr(pt + udfname.size() + 1);
-			istringstream iss(rest_str);
-			vector<int> breakpoints;
-			int val;
-			while (true) {
-				if (!(iss >> val)) break;
-				breakpoints.push_back(val);
+			auto res = aux_register_udf(ctx, udfname);
+			if (res) {
+				cout << "Cannot register udf. (is the udf file available?) " << endl;
 			}
-			if (!iss.eof()) {
-				throw std::invalid_argument("Invalid integer for debug breakpoints");
+			else {
+				auto pt = cmd.find(udfname);
+				auto rest_str = cmd.substr(pt + udfname.size() + 1);
+				istringstream iss(rest_str);
+				vector<int> breakpoints;
+				int val;
+				while (true) {
+					if (!(iss >> val)) break;
+					breakpoints.push_back(val);
+				}
+				if (!iss.eof()) {
+					throw std::invalid_argument("Invalid integer for debug breakpoints");
+				}
+				if (breakpoints.size() == 1 && breakpoints.front() == 0)
+					aux_debug_del_breakpoints(ctx, udfname.c_str(), breakpoints); // remove all breakpoints
+				//separate negative from positive
+				vector<int> breakpoints_positive;
+				vector<int> breakpoints_negative;
+				for (auto v : breakpoints) {
+					if (v > 0) breakpoints_positive.push_back(v);
+					else if (v < 0) breakpoints_negative.push_back(v);
+					else throw std::invalid_argument("debug breakpoints array must not contain zero.");
+				}
+				aux_debug_add_breakpoints(ctx, udfname.c_str(), breakpoints_positive);
+				aux_debug_del_breakpoints(ctx, udfname.c_str(), breakpoints_negative);
 			}
-			if (breakpoints.size() == 1 && breakpoints.front() == 0)
-				aux_debug_del_breakpoints(ctx, udfname.c_str(), breakpoints); // remove all breakpoints
-			//separate negative from positive
-			vector<int> breakpoints_positive;
-			vector<int> breakpoints_negative;
-			for (auto v : breakpoints) {
-				if (v > 0) breakpoints_positive.push_back(v);
-				else if (v < 0) breakpoints_negative.push_back(v);
-				else throw std::invalid_argument("debug breakpoints array must not contain zero.");
-			}
-			aux_debug_add_breakpoints(ctx, udfname.c_str(), breakpoints_positive);
-			aux_debug_del_breakpoints(ctx, udfname.c_str(), breakpoints_negative);
 		}
 	}
 	else if (parsed.front() == "play") {

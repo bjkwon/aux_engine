@@ -35,6 +35,20 @@ static inline const CSignals* asCSignals(AuxObj h) {
     return reinterpret_cast<const CSignals*>(h);
 }
 
+static DebugAction to_internal_action(auxDebugAction a)
+{
+    switch (a)
+    {
+    case auxDebugAction::AUX_DEBUG_NO_DEBUG:   return DebugAction::NoDebug;
+    case auxDebugAction::AUX_DEBUG_CONTINUE:   return DebugAction::Continue;
+    case auxDebugAction::AUX_DEBUG_STEP:       return DebugAction::Step;
+    case auxDebugAction::AUX_DEBUG_STEP_OUT:   return DebugAction::StepOut;
+    case auxDebugAction::AUX_DEBUG_STEP_IN:    return DebugAction::StepIn;
+    case auxDebugAction::AUX_DEBUG_ABORT_BASE: return DebugAction::AbortToBase;
+    default:                   return DebugAction::NoDebug; // safe fallback
+    }
+}
+
 auxContext* aux_init(auxConfig* cfg)
 {
     srand((unsigned)time(0));
@@ -43,6 +57,25 @@ auxContext* aux_init(auxConfig* cfg)
     pglobalEnv->AuxPath = cfg->search_paths;
     pglobalEnv->InitBuiltInFunctions();
 
+    // Wrap the public hook (function pointer) into internal DebugHook (std::function)
+    if (cfg->debug_hook)
+    {
+        auxDebugHook user_hook = cfg->debug_hook; // copy the function pointer
+        pglobalEnv->debug_hook = [user_hook](const DebugEvent& ev) -> DebugAction
+        {
+            auxDebugInfo info;
+            info.ctx = reinterpret_cast<auxContext*>(ev.frame); // AuxScope* -> auxContext*
+            info.line = ev.line;
+            info.filename = ev.filename;
+            auxDebugAction user_action = user_hook(info);
+            return to_internal_action(user_action);
+        };
+    }
+    else
+    {
+        pglobalEnv->debug_hook = DebugHook{};
+    }
+
     AuxScope * psc = new AuxScope(pglobalEnv);
 //    xscope.push_back(psc);
     return (auxContext*)psc;
@@ -50,7 +83,7 @@ auxContext* aux_init(auxConfig* cfg)
 
 void aux_close(auxContext* ctx)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return ;  // null pointer or environment not initialized
     }
@@ -60,7 +93,7 @@ void aux_close(auxContext* ctx)
 
 string aux_version(auxContext* ctx)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return "";  // null pointer or environment not initialized
     }
@@ -70,7 +103,7 @@ string aux_version(auxContext* ctx)
 
 int aux_eval(auxContext* ctx, const string& script, const auxConfig& cfg, string& preview_or_error)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -217,7 +250,7 @@ size_t aux_flatten_channel(const AuxObj& v, int channel_index, auxtype* out, siz
 
 int aux_del_var(auxContext* ctx, const string& varname)
 {
-    auto* frame = static_cast<AuxScope*>(ctx);
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return -1;
     auto it = frame->Vars.find(varname);
     if (it == frame->Vars.end()) return 1;
@@ -227,7 +260,7 @@ int aux_del_var(auxContext* ctx, const string& varname)
 
 int aux_get_vars(auxContext* ctx, vector<string>& vars)
 {
-    auto* frame = static_cast<AuxScope*>(ctx);
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return -1;
     for (auto v : frame->Vars)
         vars.push_back(v.first);
@@ -236,7 +269,7 @@ int aux_get_vars(auxContext* ctx, vector<string>& vars)
 
 AuxObj aux_get_var(auxContext* ctx, const string& varname)
 {
-    auto* frame = static_cast<AuxScope*>(ctx);
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return nullptr;
 
     auto it = frame->Vars.find(varname);
@@ -248,7 +281,7 @@ AuxObj aux_get_var(auxContext* ctx, const string& varname)
 vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname)
 {
     vector<AuxObj> out;
-    auto* frame = static_cast<AuxScope*>(ctx);
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return out;
 
     auto it = frame->Vars.find(varname);
@@ -265,7 +298,7 @@ vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname)
 map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname)
 {
     map<string, AuxObj> out;
-    auto* frame = static_cast<AuxScope*>(ctx);
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return out;
 
     auto it = frame->Vars.find(varname);
@@ -283,7 +316,7 @@ map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname)
 
 int aux_describe_var(auxContext* ctx, const AuxObj& v, uint16_t& typeName, const auxConfig& cfg, string& preview)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -305,7 +338,7 @@ int aux_describe_var(auxContext* ctx, const AuxObj& v, uint16_t& typeName, const
 */
 int aux_debug_add_breakpoints(auxContext* ctx, const string& udfname, const vector<int>& lines)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -337,7 +370,7 @@ int aux_debug_add_breakpoints(auxContext* ctx, const string& udfname, const vect
 // In order to clear all breakpoints, make lines[0] 0
 int aux_debug_del_breakpoints(auxContext* ctx, const string& udfname, const vector<int>& lines)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -361,7 +394,7 @@ int aux_debug_del_breakpoints(auxContext* ctx, const string& udfname, const vect
     }
     int removed = 0;
     for (int line : lines) {
-        auto jt = std::find(breaks.begin(), breaks.end(), line);
+        auto jt = std::find(breaks.begin(), breaks.end(), -line);
         if (jt != breaks.end()) {
             breaks.erase(jt);
             ++removed;
@@ -376,7 +409,7 @@ int aux_debug_del_breakpoints(auxContext* ctx, const string& udfname, const vect
 vector<int> aux_debug_view_breakpoints(auxContext* ctx, const string& udfname, vector<int>& lines)
 {
     vector<int> out;
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return out;  // null pointer or environment not initialized; returns with zero length
     }
@@ -390,7 +423,7 @@ vector<int> aux_debug_view_breakpoints(auxContext* ctx, const string& udfname, v
 
 int aux_define_udf(auxContext* ctx, const string& udfname, const string& udfpath, string& errstr)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -432,7 +465,7 @@ int aux_define_udf(auxContext* ctx, const string& udfname, const string& udfpath
 
 int aux_add_udfpath(auxContext* ctx, const string& udfpath)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -442,7 +475,7 @@ int aux_add_udfpath(auxContext* ctx, const string& udfpath)
 
 int aux_remove_udfpath(auxContext* ctx, const string& udfpath)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -452,7 +485,7 @@ int aux_remove_udfpath(auxContext* ctx, const string& udfpath)
 string aux_get_udfpath(auxContext* ctx)
 {
     string out;
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return out;  // null pointer or environment not initialized
     }
@@ -464,7 +497,7 @@ string aux_get_udfpath(auxContext* ctx)
 vector<string> aux_enum_vars(auxContext* ctx)
 {
     vector<string> out;
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return out;  // null pointer or environment not initialized
     }
@@ -475,7 +508,7 @@ vector<string> aux_enum_vars(auxContext* ctx)
 
 int aux_get_fs(auxContext* ctx)
 {
-    AuxScope* frame = static_cast<AuxScope*>(ctx);
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
@@ -494,22 +527,36 @@ auxDebugAction  aux_handle_debug_key(auxContext* ctx, const string& instr)
 	switch (instr.substr(first).front()) {
 	case 's':
 	case 'S':
-		return auxDebugAction::Step;
+		return auxDebugAction::AUX_DEBUG_STEP;
 	case 'i':
 	case 'I':
-		return auxDebugAction::StepIn;
+		return auxDebugAction::AUX_DEBUG_STEP_IN;
 	case 'o':
 	case 'O':
-		return auxDebugAction::StepOut;
+		return auxDebugAction::AUX_DEBUG_STEP_OUT;
 	case 'c':
 	case 'C':
-		return auxDebugAction::Continue;
+		return auxDebugAction::AUX_DEBUG_CONTINUE;
 	case 'x':
 	case 'X':
-		return auxDebugAction::AbortToBase;
+		return auxDebugAction::AUX_DEBUG_ABORT_BASE;
 	default:
 		msg = "Invalid debugger contol key";
 		//throw exception_etc(sc, sc.node, msg).raise();
-        return auxDebugAction::NoDebug;
+        return auxDebugAction::AUX_DEBUG_NO_DEBUG;
     }
+}
+
+AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return -1;  // null pointer or environment not initialized
+    }
+    string estr;
+    AstNode* t_func = frame->ReadUDF(estr, udfname);
+    if (t_func) 
+        return 0; // inspect t_func for other information.. keep it for later use
+    else 
+        return 1;
 }

@@ -229,8 +229,11 @@ void _rend(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	string estr;
 	CVar arg = args.front();
 	string param = arg.str();
-	if (param=="str")
+	if (param == "str") {
+		//most likely the argument is from fread("byte") and the buffer may be big enough, but just for the safety
 		past->Sig.bufType = 'S';
+		past->Sig.UpdateBuffer(past->Sig.nSamples+1);
+	}
 	else {
 		try {
 			const uint8_t* p = reinterpret_cast<const uint8_t*>(past->Sig.strbuf);

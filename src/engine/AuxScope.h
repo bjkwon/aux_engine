@@ -35,7 +35,7 @@ enum class DebugAction {
 
 struct DebugEvent {
 	AuxScope* frame;           // current frame / workspace
-	const AstNode* node;    // where we stopped
+	string filename;    // udf file name
 	int line;               // convenience
 };
 
@@ -253,7 +253,7 @@ public:
 	AstNode* searchtree(const AstNode* pTarget, AstNode* pStart);
 	const AstNode* searchtree(const AstNode* p, int type, int line2check = -1);
 	multimap<CVar, AstNode*> register_switch_cvars(const AstNode* pnode, vector<int>& undefined);
-	AstNode* ReadUDF(string& emsg, const char* udf_filename);
+	AstNode* ReadUDF(string& emsg, const string& udf_filename);
 	AstNode* RegisterUDF(const AstNode* p, const char* fullfilename, const string& filecontent);
 	CVar* GetGlobalVariable(const AstNode* pnode, const char* varname);
 	CVar* GetVariable(const char* varname, const AstNode* pnode, CVar* pvar = NULL);
