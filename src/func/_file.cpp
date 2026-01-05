@@ -123,14 +123,14 @@ Cfunction set_builtin_function_fread(fGate fp)
 	ft.func = fp;
 	ft.alwaysstatic = false;
 	vector<string> desc_arg_req = { "FILE_ID", "precision", };
-	vector<string> desc_arg_opt = { "additional_arg"};
-	vector<CVar> default_arg = { CVar(string("")) };
+	vector<string> desc_arg_opt = { "number of items to read"};
+	vector<CVar> default_arg = { CVar(), };
 	ft.defaultarg = default_arg;
 	set<uint16_t> allowedTypes1 = { 1, };
 	set<uint16_t> allowedTypes2 = { TYPEBIT_STRING + 1, TYPEBIT_STRING + 2, };
 	ft.allowed_arg_types.push_back(allowedTypes1);
 	ft.allowed_arg_types.push_back(allowedTypes2);
-	ft.allowed_arg_types.push_back(allowedTypes2);
+	ft.allowed_arg_types.push_back(allowedTypes1);
 	ft.desc_arg_req = desc_arg_req;
 	ft.desc_arg_opt = desc_arg_opt;
 	ft.narg1 = desc_arg_req.size();
@@ -150,7 +150,7 @@ Cfunction set_builtin_function_filepointer(fGate fp)
 	ft.defaultarg = default_arg;
 	set<uint16_t> allowedTypes1 = { 1, };
 	ft.allowed_arg_types.push_back(allowedTypes1);
-	set<uint16_t> allowedTypes2 = { 1, };
+	set<uint16_t> allowedTypes2 = { TYPEBIT_NULL, 1, };
 	ft.allowed_arg_types.push_back(allowedTypes2);
 	ft.desc_arg_req = desc_arg_req;
 	ft.desc_arg_opt = desc_arg_opt;
@@ -225,34 +225,19 @@ static inline bool isnumeric(const char* buf)
 	return true;
 }
 
-class FileOpenGuard {
+class FileAccessGuard {
 public:
-	explicit FileOpenGuard(uint64_t fd, EngineRuntime* pEnv) : pos(-1) {
-		if (!fd) {
-			throw std::invalid_argument("FILE* is null");
-		}
+    FileAccessGuard(uint64_t fd, EngineRuntime* pEnv) {
+        if (!pEnv) throw std::invalid_argument("EngineRuntime is null");
+        if (!fd)   throw std::invalid_argument("fd is 0");
 
-		auto it = pEnv->fileTable.find(fd);
-		if (it == pEnv->fileTable.end() || !it->second.open) {
-			throw std::runtime_error("Invalid or closed file descriptor");
-		}
-		fp = it->second.fp;
-		pos = ftell(fp);
-		if (pos == -1L) {
-			throw std::runtime_error("ftell failed");
-		}
-
-	}
-	FILE* fp;
-
-	~FileOpenGuard() {
-		if (fp && pos != -1L) {
-			fseek(fp, pos, SEEK_SET); // best-effort restore
-		}
-	}
-
-private:
-	long  pos;
+        auto it = pEnv->fileTable.find(fd);
+        if (it == pEnv->fileTable.end() || !it->second.open || !it->second.fp) {
+            throw std::runtime_error("Invalid or closed file descriptor");
+        }
+        fp = it->second.fp;
+    }
+    FILE* fp = nullptr;
 };
 
 static void EnumAudioVariables(AuxScope* past, vector<string>& var)
@@ -285,7 +270,7 @@ void _fclose(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	try {
 		auto fd = (uint64_t)past->Sig.value();
-		FileOpenGuard fog(fd, past->pEnv);
+		FileAccessGuard fog(fd, past->pEnv);
 
 		past->Sig.SetValue(0);
 		if (fclose(fog.fp)== EOF) {
@@ -315,14 +300,10 @@ void _fclose(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
    if the last arg is "a2" or "audio2," it rescales in the range and makes the object audio (stereo)
 */
 
-static FILE* prepare_freadwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args, int& bytes, string& prec, char* additional)
+static FILE* prepare_freadwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args, int& bytes, string& prec)
 {
-	//first arg is always file identifier
-	//second arg is the signal to write to file
-	//third arg is precision--one of the following: int8 int16 int32 uint8 uint16 uint32 char float double
-
 	auto fd = (uint64_t)past->Sig.value();
-	FileOpenGuard fog(fd, past->pEnv);
+	FileAccessGuard fog(fd, past->pEnv);
 	FILE* fp = fog.fp;
 
 	string fname = pnode->str;
@@ -341,8 +322,6 @@ static FILE* prepare_freadwrite(AuxScope* past, const AstNode* pnode, const vect
 		bytes = 8;
 	else
 		throw exception_func(*past, pnode, "Second arg must be one of the following: char byte int16 uint16 float int32 uint32 double", fname).raise();
-	if (fname == "fread")
-		strcpy(additional, (*++arg).str().c_str());
 	return fp;
 }
 
@@ -390,24 +369,49 @@ size_t fwrite_general(T var, const CVar& sig, string prec, FILE* file, int bytes
 				[pvar, bytes, factor, file](auxtype v) { *pvar = (T)(factor * v - .5); fwrite(pvar, bytes, 1, file); });
 		else
 			for_each(sig.buf, sig.buf + sig.nSamples,
-				[pvar, bytes, factor, file](auxtype v) { *pvar = (T)(v - .5); fwrite(pvar, bytes, 1, file); });
+				[pvar, bytes, factor, file](auxtype v) { *pvar = (T)(v); fwrite(pvar, bytes, 1, file); });
 	}
 	return sig.nSamples;
 }
 
+//first arg is always file identifier
+//second arg is the signal to write to file
+//third arg is precision--one of the following: int8 int16 int32 uint8 uint16 uint32 char float double
 
 // As of 12/22/2022, if aux2 was built with float, fwrite may generate double, but that's not true double (it's float in double format)
 // Likewise, fread with double may succeed, but the data is stored in the float buffer
+// what?? 1/4/2026
+
+// bufType 'B' : "byte" only
+// bufType 'S' : "char" only
+// boolean : "byte" only
+// rest of non-audio: int8 int16 int32 uint8 uint16 uint32 float double. For integer types, values exceeding the maximum will be overflown.
+// audio: for "float" "double" saved as data [-1, 1]; for other types, normalized by the maximum for each type (e.g., 32768 for int16)
+// time sequence: not yet implemented 
+
 void _fwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	try {
 		CVar firstarg = args[0];
 		int bytes;
 		string prec;
+		string estr;
 		size_t res = -1;
-		FILE* file = prepare_freadwrite(past, pnode, args, bytes, prec, NULL);
+		FILE* file = prepare_freadwrite(past, pnode, args, bytes, prec);
 		const CVar* pobj = NULL;
 		auto tp = args[0].type();
+		if (ISSTRING(tp) && prec != "char") {
+			estr = "fwrite with char only for string type.";
+			throw std::invalid_argument(estr);
+		}
+		if ((ISBYTE(tp) || ISBOOL(tp)) && prec != "byte") {
+			estr = "fwrite with byte only for byte or boolean type.";
+			throw std::invalid_argument(estr);
+		}
+		if (ISCOMPLEX(tp) || ISTSEQ(tp) || ISTSHOT(tp)) {
+			estr = "fwrite not implemented for complex or time-sequence type.";
+			throw std::invalid_argument(estr);
+		}
 		if (ISAUDIO(tp))
 		{
 			if (tp & TYPEBIT_TEMPO_CHAINS || (tp & TYPEBIT_TEMPO_ONE && args[0].tmark > 0))
@@ -488,32 +492,55 @@ void _fwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 }
 
 template<typename T>
-size_t fread_general(T var, CVar& sig, FILE* file, int bytes, char* addarg, uint64_t factor)
+size_t fread_general(T var, CVar& sig, FILE* file, int bytes, auxtype _count)
 {
-	// If you want to enforce "bytes matches T", uncomment:
+	// var is a placeholder for the type T for fread
+	// bytes is assumed to be correct according to the size of T
+	// To enforce "bytes matches T", uncomment:
 	// if (bytes != (int)sizeof(T)) throw std::invalid_argument("bytes != sizeof(T)");
 
 	T* pvar = &var;
 	size_t nread = 0;
-	for (size_t i = 0; i < (size_t)sig.nSamples; ++i)
-	{
-		size_t got = std::fread(pvar, (size_t)bytes, 1, file);
-		if (got == 1) {
-			sig.buf[i] = static_cast<auxtype>(*pvar); // or your factor logic if needed
-			++nread;
-			continue;
-		}
-		// got == 0 => EOF or error
-		if (std::ferror(file)) {
+	auxtype count = min((auxtype)sig.nSamples, _count);
+	if (bytes == 1) {
+		size_t got = fread(sig.strbuf, (size_t)bytes, (size_t)count, file);
+		if (got == (size_t)_count)
+			return got;
+		else if (ferror(file)) {
 			int e = errno;
-			std::ostringstream oss;
-			oss << "fread failed at item " << i
-				<< " (requested bytes=" << bytes << "). "
+			ostringstream oss;
+			oss << "fread failed for single byte reading "
 				<< (e ? std::strerror(e) : "I/O error");
 			throw std::runtime_error(oss.str());
 		}
-		// Not an I/O error => EOF / truncated input
-		break;
+		else {
+			ostringstream oss;
+			oss << "fread failed "
+				<< " (requested bytes to read=" << (size_t)_count << "), "
+				<< " (actual bytes read=" << got << "). ";;
+		}
+	}
+	else {
+		for (size_t i = 0; i < (size_t)count; ++i)
+		{
+			size_t got = fread(pvar, (size_t)bytes, 1, file);
+			if (got == 1) {
+				sig.buf[i] = static_cast<auxtype>(*pvar); // or your factor logic if needed
+				++nread;
+				continue;
+			}
+			// got == 0 => EOF or error
+			if (ferror(file)) {
+				int e = errno;
+				ostringstream oss;
+				oss << "fread failed at item " << i
+					<< " (requested bytes=" << bytes << "). "
+					<< (e ? std::strerror(e) : "I/O error");
+				throw std::runtime_error(oss.str());
+			}
+			// Not an I/O error => EOF / truncated input
+			break;
+		}
 	}
 	return nread;
 }
@@ -528,65 +555,77 @@ void _fread(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	int bytes;
 	string prec;
 	ostringstream oss;
-	char addarg[16] = {};
 	try {
-		FILE* fp = prepare_freadwrite(past, pnode, args, bytes, prec, addarg);
-
+		FILE* fp = prepare_freadwrite(past, pnode, args, bytes, prec);
+		auto addarg = *(args.end() - 1);
+		auto count = std::numeric_limits<double>::infinity();
+		if (!ISNULL(addarg.type())) count = addarg.buf[0];
+		long currentpt = ftell(fp);
+		if (currentpt == -1) {
+			oss << "ftell failed, return code= " << currentpt << ", (file might have been closed).";
+			throw std::runtime_error(oss.str());
+		}		
 		auto res = fseek(fp, 0L, SEEK_END);
 		if (res != 0) {
 			oss << "fseek failed, return code= " << res << ", (file might have been closed).";
 			throw std::runtime_error(oss.str());
 		}
-		size_t sz = ftell(fp);
+		long sz = ftell(fp);
 		if (sz == -1) {
 			oss << "ftell failed, return code= " << sz << ", (file might have been closed).";
 			throw std::runtime_error(oss.str());
 		}
-		res = fseek(fp, 0L, SEEK_SET);
+		res = fseek(fp, currentpt, SEEK_SET);
 		if (res != 0) {
 			oss << "fseek failed, return code= " << res << ", (file might have been closed).";
 			throw std::runtime_error(oss.str());
 		}
-		size_t nItems = sz / bytes;
-		if (prec == "char" || prec == "byte" || prec == "void")
-		{ // Treat it separately just to make the code neat.
-			past->Sig.SetString('\0');
-			past->Sig.UpdateBuffer((unsigned int)nItems);
-			fread(past->Sig.strbuf, bytes, nItems, fp);
-			if (prec == "byte" || prec == "void") past->Sig.bufType = 'B';
-			return;
-		}
+		size_t nItems = (sz - currentpt) / bytes;
 		past->Sig.Reset(1); // always make it non-audio
-		past->Sig.UpdateBuffer((unsigned int)nItems);
+		if (ISNULL(addarg.type()))
+			past->Sig.UpdateBuffer((unsigned int)nItems);
+		else
+			past->Sig.UpdateBuffer((unsigned int)count);
+
+		if (prec == "char" || prec == "byte" || prec == "void")
+		{
+			unsigned char temp = 0;
+			fread_general(temp, past->Sig, fp, bytes, count);
+			if (prec == "char") 
+				past->Sig.bufType = 'S';
+			else
+				past->Sig.bufType = 'B';
+			past->Sig.bufBlockSize = 1;
+		}
 		if (prec == "int8" || prec == "uint8")
 		{
 			int8_t temp = 0;
-			fread_general(temp, past->Sig, fp, bytes, addarg, 0x80);
+			fread_general(temp, past->Sig, fp, bytes, count);
 		}
 		else if (prec == "int16" || prec == "uint16")
 		{
 			int16_t temp = 0;
-			fread_general(temp, past->Sig, fp, bytes, addarg, 0x8000);
+			fread_general(temp, past->Sig, fp, bytes, count);
 		}
 		else if (prec == "int24")
 		{
 			int32_t temp = 0; // in24_t doesn't exist
-			fread_general(temp, past->Sig, fp, bytes, addarg, 0x80000000); // check
+			fread_general(temp, past->Sig, fp, bytes, count);
 		}
 		else if (prec == "int32" || prec == "uint32")
 		{
 			int32_t temp = 0;
-			fread_general(temp, past->Sig, fp, bytes, addarg, 0x80000000);
+			fread_general(temp, past->Sig, fp, bytes, count);
 		}
 		else if (prec == "float")
 		{
 			float temp = 0.;
-			fread_general(temp, past->Sig, fp, bytes, addarg, 1);
+			fread_general(temp, past->Sig, fp, bytes, count);
 		}
 		else if (prec == "double")
 		{
 			double temp = 0.;
-			fread_general(temp, past->Sig, fp, bytes, addarg, 1);
+			fread_general(temp, past->Sig, fp, bytes, count);
 		}
 	}
 	catch (const std::invalid_argument&) {
@@ -605,9 +644,9 @@ void _filepointer(AuxScope* past, const AstNode* pnode, const vector<CVar>& args
 		ostringstream oss;
 		string estr;
 		auto fd = (uint64_t)past->Sig.value();
-		FileOpenGuard fog(fd, past->pEnv);
+		FileAccessGuard fog(fd, past->pEnv);
 		FILE* fp = fog.fp;
-		if (args.empty()) {
+		if (ISNULL(args.front().type())) {
 			size_t sz = ftell(fp);
 			if (sz == -1) {
 				oss << "ftell failed, return code= " << sz << ", (file might have been closed).";
@@ -616,7 +655,7 @@ void _filepointer(AuxScope* past, const AstNode* pnode, const vector<CVar>& args
 			past->Sig.SetValue((auxtype)sz);
 		}
 		else {
-			size_t skip = (size_t)args[0].value();
+			long skip = (size_t)args[0].value();
 			auto res = fseek(fp, skip, SEEK_CUR);
 			if (res != 0) {
 				oss << "fseek failed, return code= " << res << ", (file might have been closed).";

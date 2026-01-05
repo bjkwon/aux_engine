@@ -2279,12 +2279,9 @@ string CSignal::str() const
 {
 	unsigned int k;
 	string out;
-	out.resize(nSamples-1);
-	for (k = 0; k < nSamples-1; k++) {
-		if (strbuf[k])
-			out[k] = *(strbuf + k);
-		else
-			out[k] = '\x1';
+	out.resize(nSamples);
+	for (k = 0; k < nSamples && strbuf[k]; k++) {
+		out[k] = *(strbuf + k);
 	}
 	out.resize(k);
 	return out;
