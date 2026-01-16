@@ -115,7 +115,7 @@ void appcontrol(auxContext* ctx, int precision, const string& cmd)
 		}
 	}
 	else if (parsed.front() == "udf") {
-		auto estr = set_udf(ctx, cmd.substr(0, parsed[0].size() + 1));
+		auto estr = set_udf(ctx, cmd.substr(parsed[0].size() + 1));
 		if (!estr.empty())
 			cout << estr;
 	}

@@ -11,7 +11,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(AUX2_USE_INSTALLED_AUXE "Link against an installed auxe package" ON)
 
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(portaudio CONFIG REQUIRED)
+# --- PortAudio Support for Mac -------------------------------------------------
+if(APPLE)
+  list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/portaudio")
+endif()
+
+# Try finding via Config first, then fall back to PkgConfig
+find_package(portaudio CONFIG QUIET)
+
+if(NOT portaudio_FOUND)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
+
+  # Create an imported target to match the expected usage
+  add_library(portaudio INTERFACE IMPORTED)
+  target_include_directories(portaudio INTERFACE ${PORTAUDIO_INCLUDE_DIRS})
+  target_link_directories(portaudio INTERFACE ${PORTAUDIO_LIBRARY_DIRS})
+  target_link_libraries(portaudio INTERFACE ${PORTAUDIO_LINK_LIBRARIES})
+  message(STATUS "PortAudio: using pkg-config (includes: ${PORTAUDIO_INCLUDE_DIRS})")
+endif()
+# -----------------------------------------------------------------------------
+
 
 # -------------------------
 # auxe dependency

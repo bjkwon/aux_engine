@@ -112,30 +112,44 @@ const AstNode* get_second_arg(const AstNode* pnode, bool struct_call)
 // In order to make tailing separator always, put the last item empty
 string path_join(const vector<string>& parts) {
 #ifdef _WIN32
-	const char sep = '\\';
+    const char sep = '\\';
 #else
-	const char sep = '/';
+    const char sep = '/';
 #endif
-	string result;
-	int count = 1;
-	for (const auto& p : parts) {
-		if (p.empty()) {
-			if (count == parts.size()) {
-				if (result.empty()) return result;
-				if (result.back() != sep) result += sep;
-			}
-			continue;
-		}
-		if (!result.empty() && result.back() != sep)
-			result += sep;
 
-		// Skip leading separator in next part
-		size_t start = (p.front() == sep) ? 1 : 0;
+    string result;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const string& p = parts[i];
 
-		result += p.substr(start);
-		count++;
-	}
-	return result;
+        // Handle the trailing slash "hack": if the last element is empty
+        if (p.empty()) {
+            if (i == parts.size() - 1 && !result.empty() && result.back() != sep) {
+                result += sep;
+            }
+            continue;
+        }
+
+        if (!result.empty()) {
+            bool result_ends = (result.back() == sep);
+            bool p_starts = (p.front() == sep);
+
+            if (result_ends && p_starts) {
+                // Both have separators, remove one to avoid "//"
+                result += p.substr(1);
+            } else if (!result_ends && !p_starts) {
+                // Neither has a separator, add one
+                result += sep;
+                result += p;
+            } else {
+                // Exactly one has a separator, just append
+                result += p;
+            }
+        } else {
+            // First part
+            result = p;
+        }
+    }
+    return result;
 }
 
 std::string base_name(const std::string& path)
