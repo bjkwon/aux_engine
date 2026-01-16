@@ -853,7 +853,11 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		past->Sig.SetFs(envFs);
 	}
 }
-
+// 0 for error opening file
+// 1 for WAV
+// 2 for MP3
+// 3 for AIFF
+// 4 for text or unknown
 static int filetype(const string& fname, string& errstr)
 {
 	FILE* fp = fopen(fname.c_str(), "rb");
@@ -885,6 +889,11 @@ void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	size_t nLines;
 	switch (res)
 	{
+	case 0:
+		errstr += " ";
+		errstr += filename;
+		throw exception_func(*past, pnode, errstr).raise();
+		break;
 	case 1:
 		//as of now Jan 2022, args is empty
 		// supplying default args for _wave()

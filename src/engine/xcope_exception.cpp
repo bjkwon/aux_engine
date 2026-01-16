@@ -11,7 +11,10 @@ AuxScope_exception& AuxScope_exception::raise()
 void AuxScope_exception::addLineCol()
 {
 	ostringstream oss;
-	if (pCtx->level == pCtx->baselevel.back()) {
+	if (!pCtx) {
+		return;
+	}
+	if (!pCtx->baselevel.empty() && pCtx->level == pCtx->baselevel.back()) {
 		if (line != 1 || col != 1) {
 			oss << "line " << line << ", col " << col;
 			sourceloc = oss.str();
@@ -44,7 +47,7 @@ void AuxScope_exception::addLineCol()
 		for (vector<int>::iterator it = lines.begin(); it != lines.end(); it++, it2++)
 		{
 			oss << '\n' << "line " << *it;
-			if (it == lines.begin()) oss << ", col " << pnode->col;
+			if (it == lines.begin() && pnode) oss << ", col " << pnode->col;
 			oss << " in " << *it2;
 		}
 	}
