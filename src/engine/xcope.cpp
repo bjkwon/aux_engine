@@ -584,6 +584,11 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 		{
 			sanitize_cell_node(ptree);
 			CVar* lobj = &Vars.find(ptree->str)->second;
+			if (lobj->cell.empty())
+			{
+				out << "A non-cell variable " << ptree->str << " cannot be accessed as a cell.";
+				throw exception_etc(*this, ptree, out.str()).raise();
+			}
 			*psigBase = (CVar*)get_cell_item(ptree, *lobj);
 			// x{n} ends here;  x{n}(ids) continues to the next parsible node
 				Sig = **psigBase;

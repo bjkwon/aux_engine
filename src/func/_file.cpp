@@ -742,8 +742,8 @@ void _wavwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	bool complete = false;
 	if (past->Sig.next) {
 		for (k = 0; k < past->Sig.nSamples; k++) {
-			val = (uint16_t)(past->Sig.buf[k] * 32768);
-			val2 = (uint16_t)(past->Sig.next->buf[k] * 32768);
+			val = (int16_t)(past->Sig.buf[k] * 32768);
+			val2 = (int16_t)(past->Sig.next->buf[k] * 32768);
 			if (fwrite(&val, 1, 2, fp) != 2) break;
 			if (fwrite(&val2, 1, 2, fp) != 2) break;
 			complete = k == past->Sig.nSamples-1;
@@ -751,7 +751,7 @@ void _wavwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	}
 	else {
 		for (uint64_t k = 0; k < past->Sig.nSamples; k++) {
-			val = (uint16_t)(past->Sig.buf[k] * 32768);
+			val = (int16_t)(past->Sig.buf[k] * 32768);
 			if (fwrite(&val, 1, 2, fp) != 2) break;
 			complete = k == past->Sig.nSamples-1;
 		}
