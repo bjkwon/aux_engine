@@ -11,26 +11,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(AUX2_USE_INSTALLED_AUXE "Link against an installed auxe package" ON)
 
 find_package(nlohmann_json CONFIG REQUIRED)
-# --- PortAudio Support for Mac -------------------------------------------------
-if(APPLE)
-  list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/portaudio")
+# --- Optional PortAudio ---------------------------------------
+option(AUX2_WITH_PORTAUDIO "Enable PortAudio playback support" ON)
+
+if(AUX2_WITH_PORTAUDIO)
+  find_package(portaudio CONFIG QUIET)
+  if(NOT portaudio_FOUND)
+    message(WARNING "PortAudio not found; disabling AUX2_WITH_PORTAUDIO.")
+    set(AUX2_WITH_PORTAUDIO OFF)
+  endif()
 endif()
-
-# Try finding via Config first, then fall back to PkgConfig
-find_package(portaudio CONFIG QUIET)
-
-if(NOT portaudio_FOUND)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
-
-  # Create an imported target to match the expected usage
-  add_library(portaudio INTERFACE IMPORTED)
-  target_include_directories(portaudio INTERFACE ${PORTAUDIO_INCLUDE_DIRS})
-  target_link_directories(portaudio INTERFACE ${PORTAUDIO_LIBRARY_DIRS})
-  target_link_libraries(portaudio INTERFACE ${PORTAUDIO_LINK_LIBRARIES})
-  message(STATUS "PortAudio: using pkg-config (includes: ${PORTAUDIO_INCLUDE_DIRS})")
-endif()
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------
 
 
 # -------------------------
@@ -47,10 +38,17 @@ endif()
 # -------------------------
 add_executable(aux2
   main.cpp
-  audioplay.cpp
   auxenv.cpp
   utils.cpp
 )
+
+if(AUX2_WITH_PORTAUDIO)
+  target_sources(aux2 PRIVATE audioplay.cpp)
+  target_link_libraries(aux2 PRIVATE portaudio)
+  target_compile_definitions(aux2 PRIVATE AUX_HAVE_PORTAUDIO=1)
+else()
+  target_compile_definitions(aux2 PRIVATE AUX_HAVE_PORTAUDIO=0)
+endif()
 
 target_include_directories(aux2 PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}
@@ -58,7 +56,6 @@ target_include_directories(aux2 PRIVATE
 
 target_link_libraries(aux2 PRIVATE
   nlohmann_json::nlohmann_json
-  portaudio
 )
 
 if(AUX2_USE_INSTALLED_AUXE)
