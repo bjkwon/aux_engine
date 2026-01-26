@@ -2,7 +2,6 @@
 #include <fstream>
 #include <sstream>
 #include "console.h"
-#include "portaudio.h"
 #include <auxe/auxe.h>
 #include "utils.h"
 #include <array>
@@ -25,8 +24,10 @@ using json = nlohmann::json;
 
 int str2vector(vector<string>& out, const string& in, const string& delim_chars); // utils.cpp
 string get_current_dir(); // utils.cpp
+#if AUX_HAVE_PORTAUDIO
+#include "portaudio.h"
 int play_audio(auxContext* ctx, const AuxObj& obj); //audioplay.cpp
-
+#endif
 std::string base_name(const std::string& path)
 {
 #ifdef _WIN32
@@ -191,18 +192,17 @@ void appcontrol(auxContext* ctx, int precision, const string& cmd)
 		}
 	}
 	else if (parsed.front() == "play") {
-
+#if AUX_HAVE_PORTAUDIO
 		if (nItems == 2) {
 			auto varname = parsed[1];
 			auto obj = aux_get_var(ctx, varname);
 			if (obj != nullptr && aux_is_audio(obj)) {
 				play_audio(ctx, obj);
-
-
 			}
-
 		}
-
+#else
+		cout << "Audio playback not built (PortAudio disabled)." << endl;
+#endif
 	}
 }
 #define AUXENV_FILE "auxenv.json"

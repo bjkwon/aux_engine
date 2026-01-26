@@ -27,6 +27,9 @@ auxConfig cfg;
 
 //extern vector<AuxScope*> xscope;
 
+static bool g_paused = false;
+static auxDebugInfo g_pauseInfo;
+
 void filesystem_call(const vector<string> cmd)
 {
 	if (cmd.front() == "pwd") {
@@ -76,12 +79,50 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 		break;
 	case '/':
 		pos = cmd.find_first_of('/');
-		//if (sc.level < 2)
-		//	throw exception_etc(sc, nodes, "Only during debugging /(debugging_control_key) can be used.").raise();
-		return aux_handle_debug_key(ctx, instr.substr(pos + 1));
+		if (!g_paused) {
+			std::cout << "Not paused. (/ commands only valid while paused)\n";
+			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+		} else {
+			auxDebugAction act = aux_handle_debug_key(ctx, instr.substr(pos + 1));
+			// aux_handle_debug_key returns STEP/CONTINUE/ABORT... based on "/s /c /x"
+			auxDebugAction r = aux_debug_resume(ctx, act);
+
+			if (act == auxDebugAction::AUX_DEBUG_ABORT_BASE) {
+				g_paused = false;
+				std::cout << "(aborted)\n";
+			}
+			else if (act == auxDebugAction::AUX_DEBUG_CONTINUE) {
+				// continue runs until next pause or finish; aux_debug_resume can indicate still paused or finished
+				// simplest: assume it either pauses again or finishes; query pause info:
+				if (r == auxDebugAction::AUX_DEBUG_NO_DEBUG) {
+					g_paused = true;
+					aux_debug_get_pause_info(ctx, g_pauseInfo);
+					std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
+				}
+				else {
+					g_paused = false;
+					std::cout << "(continued)\n";
+				}
+			}
+			else {
+				// step usually pauses again
+				g_paused = true;
+				aux_debug_get_pause_info(ctx, g_pauseInfo);
+				std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
+			}
+			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+		}
+
 	default:
 		cout << "input: " << cmd << endl;
-		aux_eval(ctx, cmd, cfg, res);
+		int st = aux_eval(ctx, cmd, cfg, res);
+		if (st == (int)auxEvalStatus::AUX_EVAL_PAUSED) {
+			g_paused = true;
+			aux_debug_get_pause_info(ctx, g_pauseInfo);
+			std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
+			std::cout << "(debug) /s step, /c continue, /x abort\n";
+			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+		}
 		cout << res << endl;
 		break;
 	}
@@ -112,6 +153,14 @@ auxDebugAction console_debug_shell(const auxDebugInfo& ev) {
 	return auxDebugAction::AUX_DEBUG_CONTINUE;
 }
 
+static auxDebugAction console_debug_notify(const auxDebugInfo& ev)
+{
+	// Optional: print immediately when pause occurs
+	std::cout << "\n--- Breakpoint hit: " << ev.filename << ":" << ev.line << " ---\n";
+	std::cout << "(debug) use /s step, /c continue, /x abort\n";
+	return auxDebugAction::AUX_DEBUG_CONTINUE; // value no longer controls blocking
+}
+
 int main(int argc, char** argv)
 {
 	srand((unsigned)time(0));
@@ -131,7 +180,7 @@ int main(int argc, char** argv)
 	cfg.display_precision = precision;
 	cfg.search_paths = auxpathfromenv;
 	cfg.sample_rate = fs0;
-	cfg.debug_hook = console_debug_shell;
+//	cfg.debug_hook = console_debug_shell;
 	auxContext *ctx = aux_init(&cfg);
 	if (!ctx) {
 		cout << "AUX Engine failed to initialize." << endl;
@@ -142,10 +191,12 @@ int main(int argc, char** argv)
 	string input;
 
 	if (argc == 1) {
+#if AUX_HAVE_PORTAUDIO
 		PaError err = Pa_Initialize();
 		if (err != paNoError) {
 			printf("error play()\n");
 		}
+#endif
 		string line;
 		bool programExit = false;
 #ifndef _WIN32
@@ -236,7 +287,9 @@ int main(int argc, char** argv)
 		}
 	}
 	save_auxenv(ctx, cfg.display_precision, AUXENV_FILE);
+#if AUX_HAVE_PORTAUDIO
 	Pa_Terminate();
+#endif
 	aux_close(ctx);
 	return 0;
 }

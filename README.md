@@ -112,6 +112,7 @@ Example (PowerShell):
 ```powershell
 git clone https://github.com/microsoft/vcpkg
 cd vcpkg
+$VCPKG_ROOT = $PWD.Path
 .\bootstrap-vcpkg.bat
 .\vcpkg install fftw3 libsamplerate
 ```
@@ -119,12 +120,14 @@ cd vcpkg
 Configure and build:
 
 ```powershell
+
+$TYPE="Debug"  #or $TYPE="Release"
 cmake -S . -B build -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE={repo_cloned_dir}\scripts\buildsystems\vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE="VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
   -DAUXE_BUILD_SHARED=ON
 
-cmake --build build --config Release
-cmake --install build --config Release --prefix .\install
+cmake --build build --config $TYPE
+cmake --install build --config $TYPE --prefix .\install
 ```
 
 ---
@@ -163,9 +166,9 @@ Install dependencies
 (Debian/Ubuntu/WSL):
 ```bash
 sudo apt install libreadline-dev portaudio19-dev
-
+TYPE=Debug # or Release
 cmake -S . -B build-wsl \
-  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_BUILD_TYPE=$TYPE \
   -DCMAKE_PREFIX_PATH=../../install-wsl
 ```
 MacOS
@@ -177,16 +180,14 @@ Windows
 # aux2 supports audio play with portaudio.
 vcpkg install portaudio 
 
-$env:VCPKG_ROOT="{where_vcpkg_is_installed}\vcpkg\"
-
 cmake -S . -B build -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake `
-  -DAUXE_BUILD_SHARED=ON `
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DAUX2_USE_INSTALLED_AUXE=ON `
   -DCMAKE_CONFIGURATION_TYPES="Debug;Release" `
   -DCMAKE_PREFIX_PATH=..\..\install"
 
-cmake --build build --config Release
-cmake --install build --config Release --prefix .\install
+cmake --build build --config $TYPE
+cmake --install build --config $TYPE --prefix .\install
 ```
 
 ## Status

@@ -13,6 +13,7 @@
 #pragma once
 #include <string>
 #include <sstream>
+#include <cstring>   // std::strlen, std::strcpy, std::strncpy, std::strtok
 
 using namespace std;
 

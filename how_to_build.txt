@@ -1,0 +1,31 @@
+$env:VCPKG_ROOT="C:\Users\bjehk\Documents\dev\vcpkg\"  # change to your actual path
+$env:type="Debug"
+$env:type="Release"
+
+auxe
+
+Remove-Item -Recurse -Force .\install\
+Remove-Item -Recurse -Force .\build\
+
+cmake -S . -B build -A x64 `
+-DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+-DAUXE_BUILD_SHARED=ON
+
+cmake --build build --config $env:type 
+cmake --install build --config $env:type  --prefix .\install
+
+aux2
+
+cmake -S . -B build -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DCMAKE_PREFIX_PATH="C:\Users\bjehk\Documents\dev\aux_engine\install" `
+  -DAUX2_USE_INSTALLED_AUXE=ON
+
+If it tries to search for MinSizeRel, do this:
+
+Remove-Item -Recurse -Force build
+cmake -S . -B build -A x64 `
+  -DCMAKE_CONFIGURATION_TYPES="Debug;Release" `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DCMAKE_PREFIX_PATH="C:\Users\bjehk\Documents\dev\aux_engine\install" `
+  -DAUX2_USE_INSTALLED_AUXE=ON

@@ -118,11 +118,18 @@ int aux_eval(auxContext* ctx, const string& script, const auxConfig& cfg, string
         return 0;
     } 
     catch (AuxScope* ast) {
-        // When aborting from udf. 
-        // ??? 
-        assert(ast->u.debugstatus == abort2base);
-        frame->son.reset();
-        return 1;
+        if (ast->u.debugstatus == abort2base) {
+            frame->son.reset();
+            preview_or_error = "Aborted to base.";
+            return (int)auxEvalStatus::AUX_EVAL_ERROR;
+        } else if (ast->u.debugstatus == paused) {
+            // paused due to breakpoint
+            preview_or_error = ""; // or "Paused at ...", up to you
+            return (int)auxEvalStatus::AUX_EVAL_PAUSED;
+        }
+        // fallback
+        preview_or_error = "Execution interrupted.";
+        return (int)auxEvalStatus::AUX_EVAL_ERROR;
     }
     catch (AuxScope_exception e) {
         preview_or_error = e.getErrMsg();
@@ -559,4 +566,75 @@ AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname)
         return 0; // inspect t_func for other information.. keep it for later use
     else 
         return 1;
+}
+
+auxDebugAction aux_debug_resume(auxContext* ctx, auxDebugAction act)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) return auxDebugAction::AUX_DEBUG_ABORT_BASE;
+
+    // Map public action to internal debugstatus
+    switch (act) {
+    case auxDebugAction::AUX_DEBUG_STEP:
+        frame->u.debugstatus = step;
+        break;
+    case auxDebugAction::AUX_DEBUG_STEP_IN:
+        frame->u.debugstatus = step_in;
+        break;
+    case auxDebugAction::AUX_DEBUG_STEP_OUT:
+        frame->u.debugstatus = step_out; // if you have it
+        break;
+    case auxDebugAction::AUX_DEBUG_ABORT_BASE:
+        frame->u.debugstatus = abort2base;
+        break;
+    case auxDebugAction::AUX_DEBUG_CONTINUE:
+    default:
+        frame->u.debugstatus = progress;
+        break;
+    }
+
+    try {
+        frame->ResumePausedUDF();  // new method you add
+        return auxDebugAction::AUX_DEBUG_CONTINUE;
+    }
+    catch (AuxScope* ast) {
+        if (ast->u.debugstatus == paused) {
+            // hit another breakpoint or step pause
+            return auxDebugAction::AUX_DEBUG_NO_DEBUG; // meaning “still paused”
+        }
+        if (ast->u.debugstatus == abort2base) {
+            frame->son.reset();
+            return auxDebugAction::AUX_DEBUG_ABORT_BASE;
+        }
+        return auxDebugAction::AUX_DEBUG_ABORT_BASE;
+    }
+}
+
+int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out)
+{
+    if (!ctx) return -1;
+
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!frame || !frame->pEnv) return -1;
+
+    // Not paused ? nothing to report
+    if (frame->u.debugstatus != paused || frame->u.paused_node == nullptr)
+        return -1;
+
+    // UDF name
+    out.filename = frame->u.paused_file.c_str();
+
+    // Line number
+    out.line = frame->u.paused_line;
+
+    // Optional: source text (if available)
+    // Many ASTs already carry source pointers; if not, return nullptr.
+    //if (frame->u.paused_node->line) {
+    //    out.text = frame->u.paused_node->src_line;
+    //}
+    //else {
+    //    out.text = nullptr;
+    //}
+
+    return 0;
 }
