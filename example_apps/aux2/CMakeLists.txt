@@ -11,7 +11,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(AUX2_USE_INSTALLED_AUXE "Link against an installed auxe package" ON)
 
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(portaudio CONFIG REQUIRED)
+# --- Optional PortAudio ---------------------------------------
+option(AUX2_WITH_PORTAUDIO "Enable PortAudio playback support" ON)
+
+if(AUX2_WITH_PORTAUDIO)
+  find_package(portaudio CONFIG QUIET)
+  if(NOT portaudio_FOUND)
+    message(WARNING "PortAudio not found; disabling AUX2_WITH_PORTAUDIO.")
+    set(AUX2_WITH_PORTAUDIO OFF)
+  endif()
+endif()
+# --------------------------------------------------------------
+
 
 # -------------------------
 # auxe dependency
@@ -27,10 +38,17 @@ endif()
 # -------------------------
 add_executable(aux2
   main.cpp
-  audioplay.cpp
   auxenv.cpp
   utils.cpp
 )
+
+if(AUX2_WITH_PORTAUDIO)
+  target_sources(aux2 PRIVATE audioplay.cpp)
+  target_link_libraries(aux2 PRIVATE portaudio)
+  target_compile_definitions(aux2 PRIVATE AUX_HAVE_PORTAUDIO=1)
+else()
+  target_compile_definitions(aux2 PRIVATE AUX_HAVE_PORTAUDIO=0)
+endif()
 
 target_include_directories(aux2 PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}
@@ -38,7 +56,6 @@ target_include_directories(aux2 PRIVATE
 
 target_link_libraries(aux2 PRIVATE
   nlohmann_json::nlohmann_json
-  portaudio
 )
 
 if(AUX2_USE_INSTALLED_AUXE)

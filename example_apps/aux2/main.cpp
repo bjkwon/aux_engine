@@ -191,10 +191,12 @@ int main(int argc, char** argv)
 	string input;
 
 	if (argc == 1) {
+#if AUX_HAVE_PORTAUDIO
 		PaError err = Pa_Initialize();
 		if (err != paNoError) {
 			printf("error play()\n");
 		}
+#endif
 		string line;
 		bool programExit = false;
 #ifndef _WIN32
@@ -285,7 +287,9 @@ int main(int argc, char** argv)
 		}
 	}
 	save_auxenv(ctx, cfg.display_precision, AUXENV_FILE);
+#if AUX_HAVE_PORTAUDIO
 	Pa_Terminate();
+#endif
 	aux_close(ctx);
 	return 0;
 }

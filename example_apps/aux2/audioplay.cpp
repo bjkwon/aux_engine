@@ -4,8 +4,10 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include "portaudio.h"
 #include <auxe/auxe.h>
+#if AUX_HAVE_PORTAUDIO
+#include "portaudio.h"
+#endif
 
 int fs;
 
@@ -13,6 +15,8 @@ using namespace std;
 
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define FRAMES_PER_BUFFER 1024 // With fs=44100 Hz, tone(500,1000).ramp(100) sounds OK with 256. If this was 4096, it sounds choppy at the end
+
+#if AUX_HAVE_PORTAUDIO
 
 class audioPlay {
 public:
@@ -146,9 +150,11 @@ void playthread(auxContext* ctx, const AuxObj& obj, uintptr_t handle, int rep, v
 		strcpy((char*)petc, "error");
 	}
 }
+#endif
 
 int play_audio(auxContext* ctx, const AuxObj& obj)
 {
+#if AUX_HAVE_PORTAUDIO	
 	fs = aux_get_fs(ctx);
 	PaStreamParameters param;
 	param.device = Pa_GetDefaultOutputDevice();
@@ -166,5 +172,8 @@ int play_audio(auxContext* ctx, const AuxObj& obj)
 	thread t1(playthread, ctx, obj, (uintptr_t)0 /*phandle->value()*/, (int)repeat, etc, param);
 	t1.detach();
 	return 0;
+#else
+	return 1;
+#endif
 }
  
