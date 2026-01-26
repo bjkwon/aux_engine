@@ -742,8 +742,8 @@ void _wavwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	bool complete = false;
 	if (past->Sig.next) {
 		for (k = 0; k < past->Sig.nSamples; k++) {
-			val = (uint16_t)(past->Sig.buf[k] * 32768);
-			val2 = (uint16_t)(past->Sig.next->buf[k] * 32768);
+			val = (int16_t)(past->Sig.buf[k] * 32768);
+			val2 = (int16_t)(past->Sig.next->buf[k] * 32768);
 			if (fwrite(&val, 1, 2, fp) != 2) break;
 			if (fwrite(&val2, 1, 2, fp) != 2) break;
 			complete = k == past->Sig.nSamples-1;
@@ -751,7 +751,7 @@ void _wavwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	}
 	else {
 		for (uint64_t k = 0; k < past->Sig.nSamples; k++) {
-			val = (uint16_t)(past->Sig.buf[k] * 32768);
+			val = (int16_t)(past->Sig.buf[k] * 32768);
 			if (fwrite(&val, 1, 2, fp) != 2) break;
 			complete = k == past->Sig.nSamples-1;
 		}
@@ -853,7 +853,11 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		past->Sig.SetFs(envFs);
 	}
 }
-
+// 0 for error opening file
+// 1 for WAV
+// 2 for MP3
+// 3 for AIFF
+// 4 for text or unknown
 static int filetype(const string& fname, string& errstr)
 {
 	FILE* fp = fopen(fname.c_str(), "rb");
@@ -886,7 +890,9 @@ void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	switch (res)
 	{
 	case 0:
-		throw exception_func(*past, pnode, "file cannot be found or opened.").raise();
+		errstr += " ";
+		errstr += filename;
+		throw exception_func(*past, pnode, errstr).raise();
 		break;
 	case 1:
 		//as of now Jan 2022, args is empty
