@@ -885,6 +885,9 @@ void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	size_t nLines;
 	switch (res)
 	{
+	case 0:
+		throw exception_func(*past, pnode, "file cannot be found or opened.").raise();
+		break;
 	case 1:
 		//as of now Jan 2022, args is empty
 		// supplying default args for _wave()

@@ -119,32 +119,32 @@ static bool isItBreakPoint(const vector<int>& breakpoints, int currentLine)
 
 void AuxScope::hold_at_break_point(const AstNode* pnode)
 {
-	// if the current line is one of breakpoints
-	// if currently stepping
-	if (isItBreakPoint(pEnv->udf[u.title].DebugBreaks, pnode->line)	)
-	{
-		if (u.debugstatus == step_in)  u.debugstatus = progress;
-		if (pEnv->debug_hook) {
-			DebugEvent ev{ this, u.title, pnode->line};
-			DebugAction action = pEnv->debug_hook(ev);
+	if (!isItBreakPoint(pEnv->udf[u.title].DebugBreaks, pnode->line))
+		return;
 
-			switch (action) {
-			case DebugAction::AbortToBase:
-				u.debugstatus = abort2base;
-				break;
-			case DebugAction::StepIn:
-				u.debugstatus = step_in;
-				break;
-			case DebugAction::Step:
-				u.debugstatus = step;
-				break;
-			case DebugAction::Continue:
-			default:
-				// leave as progress
-				break;
-			}
-		}
-	}
+	// If stepping-in just landed, switch back to progress (your current behavior)
+	if (u.debugstatus == step_in) u.debugstatus = progress;
+
+	// Record pause location somewhere accessible (new fields you add)
+	u.paused_line = pnode->line;
+	u.paused_file = u.title;      // or ev.filename
+	u.paused_node = pnode;        // store pointer to resume from
+	u.debugstatus = paused;
+
+	// Instead of calling debug_hook synchronously, unwind to aux_eval caller.
+	throw this; // You already use throw this for abort2base; we’ll distinguish by debugstatus
+}
+
+void AuxScope::ResumePausedUDF()
+{
+	// resume from paused node (often resume at same node or next node depending on semantics)
+	const AstNode* resume = u.paused_node;
+	if (!resume) return;
+
+	// common behavior: resume continues from the paused node (or next)
+	// If you want “pause before executing this line”, resume should be resume itself.
+	// If “pause after”, then use resume->next.
+	linebyline(resume);
 }
 
 const AstNode* AuxScope::linebyline(const AstNode* p)
@@ -192,5 +192,7 @@ void AuxScope::CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargo
 	if (pFirst->type == N_BLOCK)	pFirst = pFirst->next;
 	//Get the range of lines for the current udf
 	u.currentLine = pFirst->line;
+	u.paused_node = nullptr;  
+	u.paused_line = -1;
 	linebyline(pFirst);
 }

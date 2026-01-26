@@ -29,7 +29,6 @@ typedef struct auxContext auxContext;
 struct _AuxObj;
 using AuxObj = const _AuxObj*;
 
-
 enum class auxDebugAction {
     AUX_DEBUG_NO_DEBUG = -1,
     AUX_DEBUG_CONTINUE = 0,
@@ -37,6 +36,12 @@ enum class auxDebugAction {
     AUX_DEBUG_STEP_OUT,
     AUX_DEBUG_STEP_IN,
     AUX_DEBUG_ABORT_BASE
+};
+
+enum class auxEvalStatus {
+    AUX_EVAL_OK = 0,
+    AUX_EVAL_ERROR = 1,
+    AUX_EVAL_PAUSED = 2
 };
 
 struct auxDebugInfo {
@@ -85,6 +90,7 @@ AUXE_API string aux_version(auxContext* ctx);
 
 AUXE_API auxContext* aux_init(auxConfig* cfg);
 AUXE_API void        aux_close(auxContext* ctx);
+
 AUXE_API int         aux_eval(auxContext* ctx, const string& script, const auxConfig& cfg, string& preview); // returns 0 for success, preview shows the outcome; returns 1 for error preview shows the error
 AUXE_API int         aux_del_var(auxContext* ctx, const string& varname);
 AUXE_API uint16_t    aux_type(const AuxObj& v);
@@ -116,3 +122,7 @@ AUXE_API vector<string> aux_enum_vars(auxContext* ctx);
 AUXE_API auxDebugAction aux_handle_debug_key(auxContext* ctx, const string& instr);
 
 AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname);
+AUXE_API auxDebugAction aux_debug_resume(auxContext* ctx, auxDebugAction act);
+
+// Optional: query where we are paused
+AUXE_API int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out);
