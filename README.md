@@ -90,14 +90,15 @@ sudo apt install libfftw3-dev libsamplerate0-dev
 ```
 
 Build:
-
+(WSL)
 ```bash
-cmake -S . -B build \
+cmake -S . -B build-wsl \
   -DCMAKE_BUILD_TYPE=Release \
-  -DAUXE_BUILD_SHARED=ON
+  -DAUXE_BUILD_SHARED=ON \
+  -DCMAKE_INSTALL_PREFIX=$PWD/install-wsl
 
-cmake --build build -j
-cmake --install build --prefix ./install
+cmake --build build-wsl -j
+cmake --install build-wsl
 ```
 
 ---
@@ -159,9 +160,13 @@ Configure and build:
 
 Install dependencies
 
-(Debian/Ubuntu names shown):
+(Debian/Ubuntu/WSL):
 ```bash
 sudo apt install libreadline-dev portaudio19-dev
+
+cmake -S . -B build-wsl \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=../../install-wsl
 ```
 MacOS
 ```bash
@@ -172,10 +177,13 @@ Windows
 # aux2 supports audio play with portaudio.
 vcpkg install portaudio 
 
+$env:VCPKG_ROOT="{where_vcpkg_is_installed}\vcpkg\"
+
 cmake -S . -B build -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE={aux_engine_dir}\scripts\buildsystems\vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake `
   -DAUXE_BUILD_SHARED=ON `
-  -DCMAKE_PREFIX_PATH="{aux_engine_dir}\install"
+  -DCMAKE_CONFIGURATION_TYPES="Debug;Release" `
+  -DCMAKE_PREFIX_PATH=..\..\install"
 
 cmake --build build --config Release
 cmake --install build --config Release --prefix .\install
