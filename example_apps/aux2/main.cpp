@@ -115,7 +115,7 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 
 	default:
 		cout << "input: " << cmd << endl;
-		int st = aux_eval(ctx, cmd, cfg, res);
+		int st = aux_eval(&ctx, cmd, cfg, res);
 		if (st == (int)auxEvalStatus::AUX_EVAL_PAUSED) {
 			g_paused = true;
 			aux_debug_get_pause_info(ctx, g_pauseInfo);

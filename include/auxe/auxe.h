@@ -91,7 +91,7 @@ AUXE_API string aux_version(auxContext* ctx);
 AUXE_API auxContext* aux_init(auxConfig* cfg);
 AUXE_API void        aux_close(auxContext* ctx);
 
-AUXE_API int         aux_eval(auxContext* ctx, const string& script, const auxConfig& cfg, string& preview); // returns 0 for success, preview shows the outcome; returns 1 for error preview shows the error
+AUXE_API int         aux_eval(auxContext** ctx, const string& script, const auxConfig& cfg, string& preview); // returns 0 for success, preview shows the outcome; returns 1 for error preview shows the error
 AUXE_API int         aux_del_var(auxContext* ctx, const string& varname);
 AUXE_API uint16_t    aux_type(const AuxObj& v);
 AUXE_API bool        aux_is_audio(const AuxObj& v);

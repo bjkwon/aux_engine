@@ -101,10 +101,10 @@ string aux_version(auxContext* ctx)
     return env.version;
 }
 
-int aux_eval(auxContext* ctx, const string& script, const auxConfig& cfg, string& preview_or_error)
+int aux_eval(auxContext** ctx, const string& script, const auxConfig& cfg, string& preview_or_error)
 {
-    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
-    if (!ctx || !frame->pEnv) {
+    AuxScope* frame = reinterpret_cast<AuxScope*>(*ctx);
+    if (!*ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
     try {
@@ -124,7 +124,8 @@ int aux_eval(auxContext* ctx, const string& script, const auxConfig& cfg, string
             return (int)auxEvalStatus::AUX_EVAL_ERROR;
         } else if (ast->u.debugstatus == paused) {
             // paused due to breakpoint
-            preview_or_error = ""; // or "Paused at ...", up to you
+            preview_or_error = "(dbg)";
+            *ctx = reinterpret_cast<auxContext*>(ast);
             return (int)auxEvalStatus::AUX_EVAL_PAUSED;
         }
         // fallback
