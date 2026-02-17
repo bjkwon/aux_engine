@@ -45,7 +45,7 @@ enum class auxEvalStatus {
 };
 
 struct auxDebugInfo {
-    auxContext* ctx;   // current context / frame
+    auxContext** ctx;   // current context / frame
     string filename;
     int line;          // current line number in UDF (or -1 if unknown)
 };
