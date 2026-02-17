@@ -756,8 +756,10 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	if (pCalling->alt)
 		for (auto pp = pCalling->alt->child; pp; pp = pp->next)
 			nargs++;
-	EngineRuntime tempEnv(*pEnv);
-	son.reset(new AuxScope(&tempEnv));
+	// Keep the child frame bound to the same runtime object.
+	// Using a stack-local EngineRuntime here becomes dangling when debugging
+	// pauses via exception unwind and resume happens later.
+	son.reset(new AuxScope(pEnv));
 	son->u = u;
 	son->u.title = pCalling->str;
 	son->u.debugstatus = null;
@@ -860,6 +862,14 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 		son->pEnv->udf[pCalling->str].DebugBreaks = pEnv->udf[u.title].DebugBreaks;
 	//son->SetVar("_________",pStaticVars); // how can I add static variables here???
 	son->CallUDF(pCalling, pBase, nargout);
+	FinalizeChildUDFCall();
+}
+
+void AuxScope::FinalizeChildUDFCall()
+{
+	if (!son)
+		return;
+
 	if (son->u.argout.empty())
 		Sig.Reset();
 	else if (son->u.argout.size() >= 1) {

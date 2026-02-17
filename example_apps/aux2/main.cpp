@@ -85,7 +85,7 @@ auxDebugAction interpreter(auxContext** ctx, int display_precision, const string
 		} else {
 			auxDebugAction act = aux_handle_debug_key(*ctx, instr.substr(pos + 1));
 			// aux_handle_debug_key returns STEP/CONTINUE/ABORT... based on "/s /c /x"
-			auxDebugAction r = aux_debug_resume(*ctx, act);
+			auxDebugAction r = aux_debug_resume(ctx, act);
 
 			if (act == auxDebugAction::AUX_DEBUG_ABORT_BASE) {
 				g_paused = false;
@@ -163,32 +163,34 @@ static auxDebugAction console_debug_notify(const auxDebugInfo& ev)
 
 int main(int argc, char** argv)
 {
-	srand((unsigned)time(0));
-	int fs0;
-	vector<string> auxpathfromenv;
-	int precision;
-	if (!read_auxenv(fs0, auxpathfromenv, precision, AUXENV_FILE)) {
-		fs0 = DEFAULT_FS;
-		precision = PRECISION;
-	}
-	if (fs0 == 0) fs0 = DEFAULT_FS;
-	if (precision == 0) precision = PRECISION;
+	auxContext* ctx = nullptr;
+	try {
+		srand((unsigned)time(0));
+		int fs0 = 0;
+		vector<string> auxpathfromenv;
+		int precision = 0;
+		if (!read_auxenv(fs0, auxpathfromenv, precision, AUXENV_FILE)) {
+			fs0 = DEFAULT_FS;
+			precision = PRECISION;
+		}
+		if (fs0 <= 1) fs0 = DEFAULT_FS;
+		if (precision == 0) precision = PRECISION;
 
-	cfg.display_limit_x = 10;
-	cfg.display_limit_y = 10;
-	cfg.display_limit_bytes = 256;
-	cfg.display_precision = precision;
-	cfg.search_paths = auxpathfromenv;
-	cfg.sample_rate = fs0;
-//	cfg.debug_hook = console_debug_shell;
-	auxContext *ctx = aux_init(&cfg);
-	if (!ctx) {
-		cout << "AUX Engine failed to initialize." << endl;
-		return 0;
-	}
-	cout << " AUX Console version " << aux_version(ctx) << " aux2 core version " << AUX2_VERSION << endl;
-//	xscope.push_back(&sc);
-	string input;
+		cfg.display_limit_x = 10;
+		cfg.display_limit_y = 10;
+		cfg.display_limit_bytes = 256;
+		cfg.display_precision = precision;
+		cfg.search_paths = auxpathfromenv;
+		cfg.sample_rate = fs0;
+	//	cfg.debug_hook = console_debug_shell;
+		ctx = aux_init(&cfg);
+		if (!ctx) {
+			cout << "AUX Engine failed to initialize." << endl;
+			return 1;
+		}
+		cout << " AUX Console version " << aux_version(ctx) << " aux2 core version " << AUX2_VERSION << endl;
+	//	xscope.push_back(&sc);
+		string input;
 
 	if (argc == 1) {
 #if AUX_HAVE_PORTAUDIO
@@ -288,9 +290,20 @@ int main(int argc, char** argv)
 	}
 	save_auxenv(ctx, cfg.display_precision, AUXENV_FILE);
 #if AUX_HAVE_PORTAUDIO
-	Pa_Terminate();
+		Pa_Terminate();
 #endif
-	aux_close(ctx);
-	return 0;
+		aux_close(ctx);
+		return 0;
+	}
+	catch (const char* msg) {
+		cerr << "Fatal Error: " << msg << endl;
+	}
+	catch (const std::exception& e) {
+		cerr << "Fatal Error: " << e.what() << endl;
+	}
+	catch (...) {
+		cerr << "Fatal Error: unknown exception" << endl;
+	}
+	if (ctx) aux_close(ctx);
+	return 1;
 }
-

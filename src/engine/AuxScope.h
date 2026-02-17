@@ -263,7 +263,8 @@ public:
 	CVar* GetVariable(const char* varname, const AstNode* pnode, CVar* pvar = NULL);
 	void PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pStaticVars = NULL);
 	void CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargout_requested);
-	const AstNode* linebyline(const AstNode* p);
+	void FinalizeChildUDFCall();
+	const AstNode* linebyline(const AstNode* p, bool skip_first_break_check = false, bool step_once = false);
 	void hold_at_break_point(const AstNode* pnode);
 	void ResumePausedUDF();
 	FILE* fopen_from_path(const string& fname, const string& ext, string& fullfilename);

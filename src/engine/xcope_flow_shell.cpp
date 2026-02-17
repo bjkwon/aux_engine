@@ -137,25 +137,31 @@ void AuxScope::hold_at_break_point(const AstNode* pnode)
 
 void AuxScope::ResumePausedUDF()
 {
-	// resume from paused node (often resume at same node or next node depending on semantics)
 	const AstNode* resume = u.paused_node;
 	if (!resume) return;
 
-	// common behavior: resume continues from the paused node (or next)
-	// If you want “pause before executing this line”, resume should be resume itself.
-	// If “pause after”, then use resume->next.
-	linebyline(resume);
+	u.paused_node = nullptr;
+	u.paused_line = -1;
+	u.paused_file.clear();
+
+	// Execute the paused line once, without stopping on the same breakpoint again.
+	if (u.debugstatus == step || u.debugstatus == step_in || u.debugstatus == step_out)
+		linebyline(resume, true, true);
+	else
+		linebyline(resume, true, false);
 }
 
-const AstNode* AuxScope::linebyline(const AstNode* p)
+const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_check, bool step_once)
 {
+	bool first = true;
 	while (p)
 	{
 		pLast = p;
 		// T_IF, T_WHILE, T_FOR are checked here to break right at the beginning of the loop
 		u.currentLine = p->line;
 		// N_IDLIST here is probably outdated. 7/26/2023
-		if (p->type == T_ID || p->type == T_FOR || p->type == T_IF || p->type == T_WHILE || p->type == T_SWITCH || p->type == N_IDLIST || p->type == N_VECTOR)
+		if ((p->type == T_ID || p->type == T_FOR || p->type == T_IF || p->type == T_WHILE || p->type == T_SWITCH || p->type == N_IDLIST || p->type == N_VECTOR)
+			&& !(skip_first_break_check && first))
 			hold_at_break_point(p);
 		if (u.debugstatus == abort2base)
 		{
@@ -167,11 +173,23 @@ const AstNode* AuxScope::linebyline(const AstNode* p)
 		process_statement(p);
 		Sig.Reset(1); // without this, fs=3 lingers on the next line; if Sig is a cell or struct, it lingers on the next line and may cause an error
 		if (fExit) return p;
+
+		if (step_once) {
+			const AstNode* next = p->next;
+			if (next) {
+				u.paused_line = next->line;
+				u.paused_file = u.title;
+				u.paused_node = next;
+				u.debugstatus = paused;
+				throw this;
+			}
+		}
+
 		p = p->next;
+		first = false;
 	}
 	return NULL;
 }
-
 void AuxScope::CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargout_requested)
 {
 	// Returns the number of output arguments requested in the call
