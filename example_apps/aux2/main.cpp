@@ -55,7 +55,7 @@ void filesystem_call(const vector<string> cmd)
 // > app control--precision, udfpath, udf, debug, etc
 // or a regular aux syntax
 // interpreter() handles the first dispatch.
-auxDebugAction interpreter(auxContext* ctx, int display_precision, const string& instr, bool show)
+auxDebugAction interpreter(auxContext** ctx, int display_precision, const string& instr, bool show)
 {
 	auto cmd = instr;
 	triml(cmd, " ");
@@ -75,7 +75,7 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 		break;
 	case '>': //aux system prompter
 		pos = cmd.find_first_of('>');
-		appcontrol(ctx, cfg.display_precision, cmd.substr(pos + 1));
+		appcontrol(*ctx, cfg.display_precision, cmd.substr(pos + 1));
 		break;
 	case '/':
 		pos = cmd.find_first_of('/');
@@ -83,9 +83,9 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 			std::cout << "Not paused. (/ commands only valid while paused)\n";
 			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
 		} else {
-			auxDebugAction act = aux_handle_debug_key(ctx, instr.substr(pos + 1));
+			auxDebugAction act = aux_handle_debug_key(*ctx, instr.substr(pos + 1));
 			// aux_handle_debug_key returns STEP/CONTINUE/ABORT... based on "/s /c /x"
-			auxDebugAction r = aux_debug_resume(ctx, act);
+			auxDebugAction r = aux_debug_resume(*ctx, act);
 
 			if (act == auxDebugAction::AUX_DEBUG_ABORT_BASE) {
 				g_paused = false;
@@ -96,7 +96,7 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 				// simplest: assume it either pauses again or finishes; query pause info:
 				if (r == auxDebugAction::AUX_DEBUG_NO_DEBUG) {
 					g_paused = true;
-					aux_debug_get_pause_info(ctx, g_pauseInfo);
+					aux_debug_get_pause_info(*ctx, g_pauseInfo);
 					std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
 				}
 				else {
@@ -107,7 +107,7 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 			else {
 				// step usually pauses again
 				g_paused = true;
-				aux_debug_get_pause_info(ctx, g_pauseInfo);
+				aux_debug_get_pause_info(*ctx, g_pauseInfo);
 				std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
 			}
 			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
@@ -115,10 +115,10 @@ auxDebugAction interpreter(auxContext* ctx, int display_precision, const string&
 
 	default:
 		cout << "input: " << cmd << endl;
-		int st = aux_eval(&ctx, cmd, cfg, res);
+		int st = aux_eval(ctx, cmd, cfg, res);
 		if (st == (int)auxEvalStatus::AUX_EVAL_PAUSED) {
 			g_paused = true;
-			aux_debug_get_pause_info(ctx, g_pauseInfo);
+			aux_debug_get_pause_info(*ctx, g_pauseInfo);
 			std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
 			std::cout << "(debug) /s step, /c continue, /x abort\n";
 			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
@@ -234,7 +234,7 @@ int main(int argc, char** argv)
 #endif
 				if (!input.empty())
 				{
-					interpreter(ctx, cfg.display_precision, input, true);
+					interpreter(&ctx, cfg.display_precision, input, true);
 					programExit = false;
 				}
 				else
@@ -274,7 +274,7 @@ int main(int argc, char** argv)
 		}
 		input += ")";
 		try {
-			interpreter(ctx, cfg.display_precision, input, false);
+			interpreter(&ctx, cfg.display_precision, input, false);
 		}
 		//catch (AuxScope_exception e) {
 		//	cout << "Error: " << e.getErrMsg() << endl;
