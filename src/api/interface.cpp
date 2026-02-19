@@ -600,8 +600,8 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
     try {
         frame->ResumePausedUDF();
         if (frame->dad && frame->dad->son.get() == frame) {
-            frame->dad->FinalizeChildUDFCall();
             *ctx = reinterpret_cast<auxContext*>(frame->dad);
+            frame->dad->FinalizeChildUDFCall();
         }
         return auxDebugAction::AUX_DEBUG_CONTINUE;
     }

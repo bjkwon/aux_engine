@@ -174,7 +174,7 @@ const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_chec
 		Sig.Reset(1); // without this, fs=3 lingers on the next line; if Sig is a cell or struct, it lingers on the next line and may cause an error
 		if (fExit) return p;
 
-		if (step_once) {
+		if (step_once && p->next) {
 			const AstNode* next = p->next;
 			if (next) {
 				u.paused_line = next->line;
