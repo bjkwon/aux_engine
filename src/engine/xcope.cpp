@@ -749,6 +749,11 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 {
 	if (!pCalling->str)
 		throw exception_etc(*this, pCalling, "p->str null pointer in PrepareAndCallUDF(p,...)").raise();
+	// Only keep pending assignment metadata when this UDF call is the whole RHS root.
+	if (!(u.pending_assign_lhs && u.pending_assign_rhs_call == pCalling)) {
+		u.pending_assign_lhs = nullptr;
+		u.pending_assign_rhs_call = nullptr;
+	}
 	// Check if the same udf is called during debugging... in that case Script shoudl be checked and handled...
 
 	// Checking the number of input args used in the call
@@ -863,6 +868,8 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	//son->SetVar("_________",pStaticVars); // how can I add static variables here???
 	son->CallUDF(pCalling, pBase, nargout);
 	FinalizeChildUDFCall();
+	u.pending_assign_lhs = nullptr;
+	u.pending_assign_rhs_call = nullptr;
 }
 
 void AuxScope::FinalizeChildUDFCall()
@@ -893,6 +900,19 @@ void AuxScope::FinalizeChildUDFCall()
 	Sig.functionEvalRes = true;
 //	xscope.pop_back(); // move here????? to make purgatory work...
 	son.reset();
+}
+
+void AuxScope::CompletePendingAssignmentAfterDebugResume()
+{
+	if (!u.pending_assign_lhs)
+		return;
+
+	// Conservative completion for x = udf(...):
+	// parent RHS evaluation was interrupted by debugger pause, so bind the finalized UDF output now.
+	SetVar(u.pending_assign_lhs->str, &Sig);
+
+	u.pending_assign_lhs = nullptr;
+	u.pending_assign_rhs_call = nullptr;
 }
 
 multimap<CVar, AstNode*> AuxScope::register_switch_cvars(const AstNode* pnode, vector<int>& undefined)

@@ -6,6 +6,8 @@
 #include <string>
 #include <iostream>
 #include <iterator>
+#include <iomanip>
+#include <sstream>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
 #include <auxe/auxe.h>
@@ -21,6 +23,7 @@ string show_preview(const AuxScope* ctx, int display_precision, int display_limi
 using namespace std;
 
 #define DEFAULT_FS 22050
+constexpr int DEFAULT_DISPLAY_LIMIT_STR = 32;
 
 //extern vector<AuxScope*> xscope;
 EngineRuntime* pglobalEnv = nullptr;
@@ -53,6 +56,7 @@ auxContext* aux_init(auxConfig* cfg)
 {
     srand((unsigned)time(0));
     if (cfg->sample_rate == 0) cfg->sample_rate = DEFAULT_FS;
+    if (cfg->display_limit_str <= 0) cfg->display_limit_str = DEFAULT_DISPLAY_LIMIT_STR;
     pglobalEnv = new EngineRuntime(cfg->sample_rate);
     pglobalEnv->AuxPath = cfg->search_paths;
     pglobalEnv->InitBuiltInFunctions();
@@ -154,6 +158,107 @@ static const CSignals* get_channel(const AuxObj& v, int channel_index)
         ch = ch->next;        // follow CSignals::next
     }
     return ch;
+}
+
+static std::string format_ms_range(const CTimeSeries* ch)
+{
+    if (!ch) return "";
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1);
+    for (const CTimeSeries* seg = ch; seg; seg = seg->chain) {
+        double seg_end = seg->tmark;
+        if (seg->GetFs() > 0) {
+            seg_end += 1000.0 * static_cast<double>(seg->nSamples) / static_cast<double>(seg->GetFs());
+        }
+        if (oss.tellp() > 0) oss << " ";
+        oss << "(" << seg->tmark << "ms~" << seg_end << "ms)";
+    }
+    return oss.str();
+}
+
+static std::string format_channel_sizes(const CTimeSeries* ch)
+{
+    if (!ch) return "";
+    std::ostringstream oss;
+    for (const CTimeSeries* seg = ch; seg; seg = seg->chain) {
+        if (oss.tellp() > 0) oss << " ";
+        oss << seg->nSamples;
+    }
+    return oss.str();
+}
+
+static std::string format_non_audio_size(const CVar* v)
+{
+    if (!v) return "";
+
+    const uint16_t t = v->type();
+    if (ISNULL(t)) return "0";
+
+    if (ISCELL(t)) {
+        return std::to_string(v->cell.size());
+    }
+    if (ISSTRUT(t)) {
+        return std::to_string(v->strut.size());
+    }
+
+    const uint64_t len = v->Len();
+    if (v->nGroups > 1) {
+        return std::to_string(v->nGroups) + "x" + std::to_string(len);
+    }
+    return std::to_string(len);
+}
+
+static std::string strip_preview_header(const std::string& raw)
+{
+    const auto nl = raw.find('\n');
+    if (nl == std::string::npos) {
+        return raw;
+    }
+
+    std::string body = raw.substr(nl + 1);
+    while (!body.empty() && (body.front() == '\n' || body.front() == '\r')) {
+        body.erase(body.begin());
+    }
+    return body;
+}
+
+static std::string collapse_preview_lines(std::string text)
+{
+    auto trim_line = [](std::string s) {
+        const auto b = s.find_first_not_of(" \t\r\n");
+        if (b == std::string::npos) return std::string{};
+        const auto e = s.find_last_not_of(" \t\r\n");
+        return s.substr(b, e - b + 1);
+    };
+
+    std::vector<std::string> lines;
+    std::string cur;
+    for (char c : text) {
+        if (c == '\n' || c == '\r') {
+            const std::string t = trim_line(cur);
+            if (!t.empty()) lines.push_back(t);
+            cur.clear();
+            continue;
+        }
+        cur.push_back(c);
+    }
+    const std::string last = trim_line(cur);
+    if (!last.empty()) lines.push_back(last);
+
+    if (lines.empty()) return {};
+    std::ostringstream oss;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) oss << " ; ";
+        oss << lines[i];
+    }
+    return oss.str();
+}
+
+static std::string truncate_text(const std::string& s, int limit)
+{
+    if (limit <= 0) return s;
+    if (static_cast<int>(s.size()) <= limit) return s;
+    return s.substr(0, static_cast<size_t>(limit)) + "...";
 }
 
 // ===== Implementations of public API =====
@@ -323,20 +428,64 @@ map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname)
 }
 
 
-int aux_describe_var(auxContext* ctx, const AuxObj& v, uint16_t& typeName, const auxConfig& cfg, string& preview)
+int aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uint16_t& type, string& size, string& preview)
 {
     AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
+    size.clear();
     if (v == nullptr)
         return 1;
     else
     {
-        typeName = asCVar(v)->type();
-        preview = show_preview(frame->Sig, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
+        type = asCVar(v)->type();
+        bool string_preview = false;
+        if (aux_is_audio(v)) {
+            const CSignals* ch1 = get_channel(v, 0);
+            const CSignals* ch2 = get_channel(v, 1);
+
+            const std::string s1 = ch1 ? format_channel_sizes(ch1) : "";
+            const std::string s2 = ch2 ? format_channel_sizes(ch2) : "";
+            if (!s1.empty() && !s2.empty()) size = s1 + " ; " + s2;
+            else if (!s1.empty()) size = s1;
+            else size = s2;
+
+            const std::string r1 = format_ms_range(ch1);
+            const std::string r2 = format_ms_range(ch2);
+            if (!r1.empty() && !r2.empty()) {
+                preview = r1 + "; " + r2;
+            } else if (!r1.empty()) {
+                preview = r1;
+            } else {
+                preview = show_preview(*asCVar(v), cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
+            }
+        } else {
+            const CVar* cv = asCVar(v);
+            size = format_non_audio_size(cv);
+            if ((type & 0xFFF0) == TYPEBIT_STRING) {
+                preview = truncate_text(cv->str(), cfg.display_limit_str);
+                string_preview = true;
+            } else {
+                const std::string raw = show_preview(*cv, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
+                preview = strip_preview_header(raw);
+            }
+        }
+        if (!string_preview) {
+            preview = collapse_preview_lines(preview);
+        }
         return 0;
     }
+}
+
+int aux_preview_current(auxContext* ctx, const auxConfig& cfg, string& preview)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return -1;
+    }
+    preview = show_preview(frame, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
+    return 0;
 }
 
 /*
@@ -599,9 +748,11 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
 
     try {
         frame->ResumePausedUDF();
-        if (frame->dad && frame->dad->son.get() == frame) {
-            *ctx = reinterpret_cast<auxContext*>(frame->dad);
-            frame->dad->FinalizeChildUDFCall();
+        AuxScope* parent = frame->dad;
+        if (parent && parent->son.get() == frame) {
+            parent->FinalizeChildUDFCall();
+            parent->CompletePendingAssignmentAfterDebugResume();
+            *ctx = reinterpret_cast<auxContext*>(parent);
         }
         return auxDebugAction::AUX_DEBUG_CONTINUE;
     }

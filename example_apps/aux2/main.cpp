@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <cassert>
+#include <iomanip>
 #include <auxe/auxe.h>
 #include <filesystem> // Include the C++17 filesystem library
 #include "portaudio.h"
@@ -29,6 +30,14 @@ auxConfig cfg;
 
 static bool g_paused = false;
 static auxDebugInfo g_pauseInfo;
+
+static std::string prompt_text()
+{
+	if (g_paused && !g_pauseInfo.filename.empty() && g_pauseInfo.line > 0) {
+		return g_pauseInfo.filename + ":" + std::to_string(g_pauseInfo.line) + "> ";
+	}
+	return "AUX> ";
+}
 
 void filesystem_call(const vector<string> cmd)
 {
@@ -63,7 +72,32 @@ auxDebugAction interpreter(auxContext** ctx, int display_precision, const string
 	string res;
 	size_t pos;
 	switch (cmd.front()) {
-	case '#': // shell command
+	case '#': { // TEMP: quick aux_describe_var probe
+		string varname = cmd.substr(1);
+		trim(varname, " ");
+		if (varname.empty()) {
+			cout << "Usage: #<varname>" << endl;
+			break;
+		}
+		AuxObj obj = aux_get_var(*ctx, varname);
+		if (!obj) {
+			cout << "Variable not found: " << varname << endl;
+			break;
+		}
+		uint16_t type = 0;
+		string size;
+		string preview;
+		int st = aux_describe_var(*ctx, obj, cfg, type, size, preview);
+		if (st != 0) {
+			cout << "aux_describe_var failed: " << st << endl;
+			break;
+		}
+		cout << "type=0x" << setw(4) << setfill('0') << hex << type << dec << endl;
+		if (!size.empty()) cout << "size=" << size << endl;
+		cout << "preview=" << preview << endl;
+		break;
+#if 0
+		// Original shell-command behavior (temporarily disabled):
 		pos = cmd.find_first_of('#');
 		str2vector(shellcmd, cmd.substr(pos + 1), string(" "));
 		if (shellcmd.size() > 0) {
@@ -73,6 +107,8 @@ auxDebugAction interpreter(auxContext** ctx, int display_precision, const string
 				system(instr.substr(pos + 1).c_str());
 		}
 		break;
+#endif
+	}
 	case '>': //aux system prompter
 		pos = cmd.find_first_of('>');
 		appcontrol(*ctx, cfg.display_precision, cmd.substr(pos + 1));
@@ -91,36 +127,25 @@ auxDebugAction interpreter(auxContext** ctx, int display_precision, const string
 				g_paused = false;
 				std::cout << "(aborted)\n";
 			}
-			else if (act == auxDebugAction::AUX_DEBUG_CONTINUE) {
-				// continue runs until next pause or finish; aux_debug_resume can indicate still paused or finished
-				// simplest: assume it either pauses again or finishes; query pause info:
-				if (r == auxDebugAction::AUX_DEBUG_NO_DEBUG) {
-					g_paused = true;
-					aux_debug_get_pause_info(*ctx, g_pauseInfo);
-					std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
-				}
 				else {
-					g_paused = false;
-					std::cout << "(continued)\n";
-				}
-			}
-			else {
-				// step usually pauses again
-				g_paused = true;
-				aux_debug_get_pause_info(*ctx, g_pauseInfo);
-				std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
-			}
-			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+					// For /s or /c: paused only when resume reports paused and pause info is available.
+					if (r == auxDebugAction::AUX_DEBUG_NO_DEBUG && aux_debug_get_pause_info(*ctx, g_pauseInfo) == 0) {
+						g_paused = true;
+					}
+					else {
+						g_paused = false;
+						string preview;
+						if (aux_preview_current(*ctx, cfg, preview) == 0 && !preview.empty())
+							cout << preview << endl;
+					}
 		}
-
-	default:
-		cout << "input: " << cmd << endl;
-		int st = aux_eval(ctx, cmd, cfg, res);
+				return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+			}
+		default:
+			int st = aux_eval(ctx, cmd, cfg, res);
 		if (st == (int)auxEvalStatus::AUX_EVAL_PAUSED) {
 			g_paused = true;
 			aux_debug_get_pause_info(*ctx, g_pauseInfo);
-			std::cout << "\n--- Paused at " << g_pauseInfo.filename << ":" << g_pauseInfo.line << " ---\n";
-			std::cout << "(debug) /s step, /c continue, /x abort\n";
 			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
 		}
 		cout << res << endl;
@@ -179,6 +204,7 @@ int main(int argc, char** argv)
 		cfg.display_limit_x = 10;
 		cfg.display_limit_y = 10;
 		cfg.display_limit_bytes = 256;
+		cfg.display_limit_str = 32;
 		cfg.display_precision = precision;
 		cfg.search_paths = auxpathfromenv;
 		cfg.sample_rate = fs0;
@@ -214,11 +240,13 @@ int main(int argc, char** argv)
 		{
 			try {
 #ifdef _WIN32
-				printf("AUX> ");
+				auto prompt = prompt_text();
+				printf("%s", prompt.c_str());
 				getline(cin, input);
 #else
 				input.clear();
-				char* readbuf = programExit ? readline("") : readline("AUX> ");
+				auto prompt = prompt_text();
+				char* readbuf = programExit ? readline("") : readline(prompt.c_str());
 				if (readbuf == NULL)
 				{
 					cout << "Internal Error: readline; Program will exit.\n";

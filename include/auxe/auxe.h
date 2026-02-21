@@ -82,6 +82,7 @@ typedef struct {
     int display_limit_x;
     int display_limit_y;
     int display_limit_bytes;
+    int display_limit_str;
     vector<string> search_paths;
     auxDebugHook debug_hook;
 } auxConfig;
@@ -104,7 +105,8 @@ AUXE_API int         aux_get_vars(auxContext* ctx, vector<string>& vars);
 AUXE_API AuxObj      aux_get_var(auxContext* ctx, const string& varname);
 AUXE_API vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname);
 AUXE_API map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname);
-AUXE_API int        aux_describe_var(auxContext* ctx, const AuxObj& v, uint16_t& typeName, const auxConfig& cfg, string& preview);
+AUXE_API int        aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uint16_t& type, string& size, string& preview);
+AUXE_API int         aux_preview_current(auxContext* ctx, const auxConfig& cfg, string& preview);
 
 AUXE_API int         aux_debug_add_breakpoints(auxContext* ctx, const string& udfpath, const vector<int>& lines);
 AUXE_API int         aux_debug_del_breakpoints(auxContext* ctx, const string& udfpath, const vector<int>& lines);

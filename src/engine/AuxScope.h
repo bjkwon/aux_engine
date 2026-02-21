@@ -220,11 +220,13 @@ public:
 	int nextBreakPoint;
 	int currentLine;
 	int nargin;
+	const AstNode* pending_assign_lhs;
+	const AstNode* pending_assign_rhs_call;
 	const AstNode* paused_node;
 	int paused_line;
 	string paused_file;
 	DEBUG_STATUS debugstatus;
-	CUDF() { nextBreakPoint = currentLine = -1; paused_node = nullptr;  paused_line = -1;  pLastRead = NULL; };
+	CUDF() { nextBreakPoint = currentLine = -1; pending_assign_lhs = nullptr; pending_assign_rhs_call = nullptr; paused_node = nullptr;  paused_line = -1;  pLastRead = NULL; };
 	virtual ~CUDF() {};
 	AstNode* pLastRead; //used for isthisUDFscope only, to mark the last pnode processed in 
 
@@ -264,6 +266,7 @@ public:
 	void PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pStaticVars = NULL);
 	void CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargout_requested);
 	void FinalizeChildUDFCall();
+	void CompletePendingAssignmentAfterDebugResume();
 	const AstNode* linebyline(const AstNode* p, bool skip_first_break_check = false, bool step_once = false);
 	void hold_at_break_point(const AstNode* pnode);
 	void ResumePausedUDF();

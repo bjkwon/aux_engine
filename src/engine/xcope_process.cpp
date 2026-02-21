@@ -520,6 +520,12 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 	const AstNode* plhs;
 	const AstNode* prhs;
 	bool isreplica = get_nodes_left_right_sides(pnode, &plhs, &prhs);
+	u.pending_assign_lhs = nullptr;
+	u.pending_assign_rhs_call = nullptr;
+	if (plhs && plhs->type == T_ID && !plhs->alt) {
+		u.pending_assign_lhs = plhs;
+		u.pending_assign_rhs_call = prhs;
+	}
 	CVar RHS;
 	if (!isreplica)
 		RHS = Compute(prhs);
@@ -532,6 +538,8 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 		eval_lhs(plhs, prhs, index, RHS, typelhs, contig, isreplica);
 		right_to_left(plhs, index, RHS, typelhs, contig, isreplica ? prhs:NULL);
 	}
+	u.pending_assign_lhs = nullptr;
+	u.pending_assign_rhs_call = nullptr;
 	return &Sig;
 }
 
