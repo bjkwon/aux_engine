@@ -86,7 +86,7 @@ This keeps auxe independent of storage formats and preserves the meaning of AUX 
 Install dependencies (Debian/Ubuntu names shown):
 
 ```bash
-sudo apt install libfftw3-dev libsamplerate0-dev
+sudo apt install libfftw3-dev libsamplerate0-dev nlohmann-json3-dev
 ```
 
 Build:
@@ -170,6 +170,9 @@ TYPE=Debug # or Release
 cmake -S . -B build-wsl \
   -DCMAKE_BUILD_TYPE=$TYPE \
   -DCMAKE_PREFIX_PATH=../../install-wsl
+cmake --build build --config $TYPE
+cmake --install build --config $TYPE --prefix ./install
+
 ```
 MacOS
 ```bash
