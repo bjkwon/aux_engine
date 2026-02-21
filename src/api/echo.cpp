@@ -1,5 +1,6 @@
 #include "echo.h"
 #include <iomanip>      // std::setw
+#include <cmath>
 
 #ifndef max
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
@@ -8,6 +9,22 @@
 #ifndef min
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #endif
+
+static std::string format_time_readable(double ms)
+{
+	std::ostringstream os;
+	os << std::fixed << std::setprecision(1);
+	double v = std::fabs(ms);
+	if (v >= 3600000.0)
+		os << (ms / 3600000.0) << "h";
+	else if (v >= 60000.0)
+		os << (ms / 60000.0) << "m";
+	else if (v >= 1000.0)
+		os << (ms / 1000.0) << "s";
+	else
+		os << ms << "ms";
+	return os.str();
+}
 
 static string echo(int depth, const CVar& sig, int display_precision, int display_limit_x, int display_limit_y, int display_limit_bytes)
 {
@@ -50,10 +67,8 @@ string echo_object::tmarks(const CTimeSeries& sig, bool unit)
 	out.precision(1);
 	int kk(0), tint(sig.CountChains());
 	for (const CTimeSeries* xp = &sig; kk < tint; kk++, xp = xp->chain) {
-		out << "(" << xp->tmark;
-		if (unit) out << "ms";
-		out << "~" << xp->tmark + 1000. * xp->nSamples / xp->GetFs();
-		if (unit) out << "ms";
+		out << "(" << format_time_readable(xp->tmark);
+		out << "~" << format_time_readable(xp->tmark + 1000. * xp->nSamples / xp->GetFs());
 		out << ") ";
 	}
 	kk = 0;
@@ -79,8 +94,9 @@ string echo_object::make(const CTimeSeries& sig, bool unit, int offset)
 	for (const CTimeSeries* xp = &sig; kk < tint; kk++, xp = xp->chain)
 	{
 		for (int k = 0; k < offset + 1; k++) out << " ";
-		out << "(" << xp->tmark;
-		if (unit) out << "ms";
+		out << "(";
+		if (unit) out << format_time_readable(xp->tmark);
+		else out << xp->tmark;
 		out << ") ";
 		out << print_vector(*xp, offset);
 	}

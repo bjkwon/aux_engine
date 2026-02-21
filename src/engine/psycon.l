@@ -30,6 +30,22 @@ char *LexString = NULL;
 int appendLexString(void);
 char *str_mirror;
 int auto_comp = 0;
+int parseTimeLiteralMs(const char *text, double *out_ms, int *out_mask);
+void registerNumberUnitMask(int line, int col, int mask);
+int consumeNumberUnitMask(int line, int col);
+
+#define TIME_UNIT_S 1
+#define TIME_UNIT_M 2
+#define TIME_UNIT_H 4
+
+typedef struct NumUnitTag_t {
+	int line;
+	int col;
+	int mask;
+	struct NumUnitTag_t *next;
+} NumUnitTag;
+
+NumUnitTag *gNumUnitHead = NULL, *gNumUnitTail = NULL;
 %}
 %pointer
 %option noyywrap
@@ -42,15 +58,26 @@ int auto_comp = 0;
 %s TSEQ
 ID	[[:alpha:]_?][[:alnum:]_]{0,512}
 NUM	[[:digit:]]+"."?[[:digit:]]*([eE][+-]?[[:digit:]]+)?|"."[[:digit:]]+
+TIME_LITERAL	({NUM}[smh])+
 %%
 %{
 	yylloc.first_line = yylloc.last_line;
 	yylloc.first_column = yylloc.last_column;
 %}
 ^[ \t;,]*   ; /*To ignore a line of empty content in a udf*/
+<INITIAL,PARENTH,BRACKET>{TIME_LITERAL} {
+	yylloc.last_column += yyleng;
+	int unit_mask = 0;
+	if (!parseTimeLiteralMs(yytext, &yylval.dval, &unit_mask))
+		return -1;
+	registerNumberUnitMask(yylloc.first_line, yylloc.first_column, unit_mask);
+    if (str_mirror) strcat(str_mirror, yytext);
+	return T_NUMBER;
+	}
 {NUM}	{
 	yylloc.last_column += yyleng;
 	yylval.dval = strtod(yytext, NULL);
+	registerNumberUnitMask(yylloc.first_line, yylloc.first_column, 0);
     if (str_mirror) strcat(str_mirror, yytext);
 	return T_NUMBER;
 	}
@@ -136,6 +163,13 @@ if|else|elseif|end|while|for|break|continue|switch|case|otherwise|function|stati
     if (str_mirror) strcat(str_mirror, yytext);
 	return getTokenID(yytext);
 	}
+<INITIAL,PARENTH,BRACKET>[smh] {
+	yylloc.last_column += yyleng;
+	yylval.str = (char*)calloc(strlen(yytext)+1, 1);
+	strcpy(yylval.str, yytext);
+    if (str_mirror) strcat(str_mirror, yytext);
+	return T_ID;
+	}
 {ID}	{
 	yylloc.last_column += yyleng;
 	yylval.str = (char*)calloc(strlen(yytext)+1, 1);
@@ -215,6 +249,12 @@ int appendLexString(void)
 
 int yysetNewStringToScan(const char *source, char *mirror)
 {
+	NumUnitTag *p, *next;
+	for (p = gNumUnitHead; p; p = next) {
+		next = p->next;
+		free(p);
+	}
+	gNumUnitHead = gNumUnitTail = NULL;
 	if (LexStringMax != LEX_STRING_MAX_INITIAL) {
 		/* (re)initialize LexString and LexStringMax - can be shrinking for memory efficiency */
 		LexStringMax = LEX_STRING_MAX_INITIAL;
@@ -234,6 +274,12 @@ int yysetNewStringToScan(const char *source, char *mirror)
 
 int yysetNewFileToScan(FILE *source)
 {
+	NumUnitTag *p, *next;
+	for (p = gNumUnitHead; p; p = next) {
+		next = p->next;
+		free(p);
+	}
+	gNumUnitHead = gNumUnitTail = NULL;
 	if (LexStringMax != LEX_STRING_MAX_INITIAL) {
 		/* (re)initialize LexString and LexStringMax - can be shrinking for memory efficiency */
 		LexStringMax = LEX_STRING_MAX_INITIAL;
@@ -253,4 +299,73 @@ void reset_stack_ptr()
 {
     yy_start_stack_ptr = 0;
     auto_comp = 0;
+}
+
+int parseTimeLiteralMs(const char *text, double *out_ms, int *out_mask)
+{
+	const char *p = text;
+	char *endptr;
+	double total = 0.;
+	double value;
+	int mask = 0;
+	while (*p)
+	{
+		value = strtod(p, &endptr);
+		if (endptr == p)
+			return 0;
+		switch (*endptr)
+		{
+		case 's':
+			total += value * 1000.;
+			mask |= TIME_UNIT_S;
+			break;
+		case 'm':
+			total += value * 60000.;
+			mask |= TIME_UNIT_M;
+			break;
+		case 'h':
+			total += value * 3600000.;
+			mask |= TIME_UNIT_H;
+			break;
+		default:
+			return 0;
+		}
+		p = endptr + 1;
+	}
+	*out_ms = total;
+	if (out_mask) *out_mask = mask;
+	return 1;
+}
+
+void registerNumberUnitMask(int line, int col, int mask)
+{
+	NumUnitTag *node = (NumUnitTag *)malloc(sizeof(NumUnitTag));
+	if (!node) return;
+	node->line = line;
+	node->col = col;
+	node->mask = mask;
+	node->next = NULL;
+	if (gNumUnitTail)
+		gNumUnitTail->next = node;
+	else
+		gNumUnitHead = node;
+	gNumUnitTail = node;
+}
+
+int consumeNumberUnitMask(int line, int col)
+{
+	NumUnitTag *prev = NULL, *p = gNumUnitHead;
+	while (p) {
+		if (p->line == line && p->col == col) {
+			int out = p->mask;
+			if (prev) prev->next = p->next;
+			else gNumUnitHead = p->next;
+			if (gNumUnitTail == p) gNumUnitTail = prev;
+			free(p);
+			return out;
+		}
+		prev = p;
+		p = p->next;
+	}
+	return 0;
 }

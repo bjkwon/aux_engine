@@ -8,6 +8,7 @@
 #include <iterator>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
 #include <auxe/auxe.h>
@@ -160,18 +161,33 @@ static const CSignals* get_channel(const AuxObj& v, int channel_index)
     return ch;
 }
 
+static std::string format_time_readable(double ms)
+{
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(1);
+    const double v = std::fabs(ms);
+    if (v >= 3600000.0)
+        os << (ms / 3600000.0) << "h";
+    else if (v >= 60000.0)
+        os << (ms / 60000.0) << "m";
+    else if (v >= 1000.0)
+        os << (ms / 1000.0) << "s";
+    else
+        os << ms << "ms";
+    return os.str();
+}
+
 static std::string format_ms_range(const CTimeSeries* ch)
 {
     if (!ch) return "";
     std::ostringstream oss;
-    oss << std::fixed << std::setprecision(1);
     for (const CTimeSeries* seg = ch; seg; seg = seg->chain) {
         double seg_end = seg->tmark;
         if (seg->GetFs() > 0) {
             seg_end += 1000.0 * static_cast<double>(seg->nSamples) / static_cast<double>(seg->GetFs());
         }
         if (oss.tellp() > 0) oss << " ";
-        oss << "(" << seg->tmark << "ms~" << seg_end << "ms)";
+        oss << "(" << format_time_readable(seg->tmark) << "~" << format_time_readable(seg_end) << ")";
     }
     return oss.str();
 }

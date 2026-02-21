@@ -201,6 +201,7 @@ AstNode *makeBinaryOpNode(int op, AstNode *first, AstNode *second, YYLTYPE loc);
 void print_token_value(FILE *file, int type, YYSTYPE value);
 char *getT_ID_str(AstNode *p);
 void handle_tilde(AstNode *proot, AstNode *pp, YYLTYPE loc);
+int consumeNumberUnitMask(int line, int col);
 
 
 /* Line 264 of yacc.c  */
@@ -2832,6 +2833,7 @@ yyreduce:
     {
 		(yyval.pnode) = newAstNode(T_NUMBER, (yyloc));
 		(yyval.pnode)->dval = (yyvsp[(1) - (1)].dval);
+		(yyval.pnode)->suppress = consumeNumberUnitMask((yylsp[(1) - (1)]).first_line, (yylsp[(1) - (1)]).first_column);
 	;}
     break;
 
@@ -4030,6 +4032,7 @@ yyreduce:
     {
 		(yyval.pnode) = newAstNode(T_NUMBER, (yyloc));
 		(yyval.pnode)->dval = (yyvsp[(1) - (1)].dval);
+		(yyval.pnode)->suppress = consumeNumberUnitMask((yylsp[(1) - (1)]).first_line, (yylsp[(1) - (1)]).first_column);
 	;}
     break;
 
@@ -4420,12 +4423,12 @@ void yyerror (AstNode **pproot, char **errmsg, char const *s)
   sprintf(msgbuf, "Invalid syntax: Line %d, Col %d: %s.\n", yylloc.first_line, yylloc.first_column, s + (strncmp(s, "syntax error, ", 14) ? 0 : 14));
   if ((p=strstr(msgbuf, "$undefined"))) {
 	sprintf(p, "'%c'(%d)", yychar, yychar);
-    strcpy(p+strlen(p), p+10);
+    memmove(p+strlen(p), p+10, strlen(p+10)+1);
   }
   if ((p=strstr(msgbuf, "end of text or ")))
-    strcpy(p, p+15);
+    memmove(p, p+15, strlen(p+15)+1);
   if ((p=strstr(msgbuf, " or ','")))
-    strcpy(p, p+7);
+    memmove(p, p+7, strlen(p+7)+1);
   msglen = strlen(msgbuf);
   if (ErrorMsg == NULL)
     errmsg_len = 0;

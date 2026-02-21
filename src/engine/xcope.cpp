@@ -11,12 +11,33 @@ using namespace std;
 
 #define AUXCORE_VERSION "2.0"
 
+#define TIME_UNIT_S 1
+#define TIME_UNIT_M 2
+#define TIME_UNIT_H 4
+
 #ifndef _WINDOWS
 #include <libgen.h>
 #define MAX_PATH 256
 #endif
 
 int GetFileText(FILE* fp, string& strOut); // utils.cpp
+
+static int count_time_unit_bits(int mask)
+{
+	int out = 0;
+	if (mask & TIME_UNIT_S) ++out;
+	if (mask & TIME_UNIT_M) ++out;
+	if (mask & TIME_UNIT_H) ++out;
+	return out;
+}
+
+static double unit_mask_to_ms_scale(int mask)
+{
+	if (mask == TIME_UNIT_S) return 1000.;
+	if (mask == TIME_UNIT_M) return 60000.;
+	if (mask == TIME_UNIT_H) return 3600000.;
+	return 1.;
+}
 
 //Application-wide global variables
 //vector<auxContext*> xscope;
@@ -327,6 +348,34 @@ CVar* AuxScope::Compute(const AstNode* pnode)
 CVar* AuxScope::TSeq(const AstNode* pnode, AstNode* p)
 {
 	//For now (6/12/2018) only [vector1][vector2] where two vectors have the same length.
+	if (p && p->type == N_VECTOR && p->str)
+	{
+		AstNode* item = ((AstNode*)p->str)->alt;
+		int unitMask = 0;
+		int hasBare = 0;
+		for (AstNode* q = item; q; q = q->next)
+		{
+			if (q->type == T_NUMBER)
+			{
+				if (q->suppress)
+					unitMask |= q->suppress;
+				else
+					hasBare = 1;
+			}
+		}
+		if (hasBare && unitMask)
+		{
+			if (count_time_unit_bits(unitMask) != 1)
+				throw exception_etc(*this, pnode, "Skipped time unit is invalid when mixed units are used.").raise();
+			double scale = unit_mask_to_ms_scale(unitMask);
+			for (AstNode* q = item; q; q = q->next)
+				if (q->type == T_NUMBER && q->suppress == 0)
+					q->dval *= scale;
+		}
+		for (AstNode* q = item; q; q = q->next)
+			if (q->type == T_NUMBER)
+				q->suppress = 0;
+	}
 	CVar tsig2, tsig = Compute(p);
 	auto type1 = tsig.type();
 	if (type1 > 2)
@@ -1503,6 +1552,33 @@ CVar* AuxScope::NodeVector(const AstNode* pn)
 CSignals AuxScope::gettimepoints(CTimeSeries* pobj, const AstNode* pnode)
 { // assume: pnode type is N_TIME_EXTRACT
 	auxtype endpoint;
+	AstNode *p1 = (AstNode*)pnode->child;
+	AstNode *p2 = p1 ? (AstNode*)p1->next : NULL;
+	if (p1 && p2)
+	{
+		int unitMask = 0;
+		int hasBare = 0;
+		if (p1->type == T_NUMBER)
+		{
+			if (p1->suppress) unitMask |= p1->suppress;
+			else hasBare = 1;
+		}
+		if (p2->type == T_NUMBER)
+		{
+			if (p2->suppress) unitMask |= p2->suppress;
+			else hasBare = 1;
+		}
+		if (hasBare && unitMask)
+		{
+			if (count_time_unit_bits(unitMask) != 1)
+				throw exception_etc(*this, pnode, "Skipped time unit is invalid when mixed units are used.").raise();
+			double scale = unit_mask_to_ms_scale(unitMask);
+			if (p1->type == T_NUMBER && p1->suppress == 0) p1->dval *= scale;
+			if (p2->type == T_NUMBER && p2->suppress == 0) p2->dval *= scale;
+		}
+		if (p1->type == T_NUMBER) p1->suppress = 0;
+		if (p2->type == T_NUMBER) p2->suppress = 0;
+	}
 	CTimeSeries* pts = pobj;
 	for (; pts; pts = pts->chain)
 		endpoint = pts->CSignal::endt();
