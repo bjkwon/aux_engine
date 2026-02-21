@@ -72,32 +72,7 @@ auxDebugAction interpreter(auxContext** ctx, int display_precision, const string
 	string res;
 	size_t pos;
 	switch (cmd.front()) {
-	case '#': { // TEMP: quick aux_describe_var probe
-		string varname = cmd.substr(1);
-		trim(varname, " ");
-		if (varname.empty()) {
-			cout << "Usage: #<varname>" << endl;
-			break;
-		}
-		AuxObj obj = aux_get_var(*ctx, varname);
-		if (!obj) {
-			cout << "Variable not found: " << varname << endl;
-			break;
-		}
-		uint16_t type = 0;
-		string size;
-		string preview;
-		int st = aux_describe_var(*ctx, obj, cfg, type, size, preview);
-		if (st != 0) {
-			cout << "aux_describe_var failed: " << st << endl;
-			break;
-		}
-		cout << "type=0x" << setw(4) << setfill('0') << hex << type << dec << endl;
-		if (!size.empty()) cout << "size=" << size << endl;
-		cout << "preview=" << preview << endl;
-		break;
-#if 0
-		// Original shell-command behavior (temporarily disabled):
+	case '#':
 		pos = cmd.find_first_of('#');
 		str2vector(shellcmd, cmd.substr(pos + 1), string(" "));
 		if (shellcmd.size() > 0) {
@@ -107,8 +82,6 @@ auxDebugAction interpreter(auxContext** ctx, int display_precision, const string
 				system(instr.substr(pos + 1).c_str());
 		}
 		break;
-#endif
-	}
 	case '>': //aux system prompter
 		pos = cmd.find_first_of('>');
 		appcontrol(*ctx, cfg.display_precision, cmd.substr(pos + 1));
