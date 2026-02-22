@@ -225,8 +225,12 @@ public:
 	const AstNode* paused_node;
 	int paused_line;
 	string paused_file;
+	const AstNode* pending_catchback_next;
+	const AstNode* pending_catchback_alt;
+	int pending_catchback_line;
+	int pending_catchback_col;
 	DEBUG_STATUS debugstatus;
-	CUDF() { nextBreakPoint = currentLine = -1; pending_assign_lhs = nullptr; pending_assign_rhs_call = nullptr; paused_node = nullptr;  paused_line = -1;  pLastRead = NULL; };
+	CUDF() { nextBreakPoint = currentLine = -1; pending_assign_lhs = nullptr; pending_assign_rhs_call = nullptr; paused_node = nullptr; paused_line = -1; pending_catchback_next = nullptr; pending_catchback_alt = nullptr; pending_catchback_line = -1; pending_catchback_col = -1; pLastRead = NULL; };
 	virtual ~CUDF() {};
 	AstNode* pLastRead; //used for isthisUDFscope only, to mark the last pnode processed in 
 

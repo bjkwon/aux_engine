@@ -522,7 +522,10 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 	bool isreplica = get_nodes_left_right_sides(pnode, &plhs, &prhs);
 	u.pending_assign_lhs = nullptr;
 	u.pending_assign_rhs_call = nullptr;
-	if (plhs && plhs->type == T_ID && !plhs->alt) {
+	// If RHS evaluation is interrupted by debugger pause, complete assignment on resume.
+	// Covers simple scalar assignment (x = udf(...)) and vector output binding
+	// ([out1,out2] = udf(...)).
+	if (plhs && ((plhs->type == T_ID && !plhs->alt) || plhs->type == N_VECTOR)) {
 		u.pending_assign_lhs = plhs;
 		u.pending_assign_rhs_call = prhs;
 	}

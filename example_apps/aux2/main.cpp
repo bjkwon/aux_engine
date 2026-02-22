@@ -116,12 +116,16 @@ auxDebugAction interpreter(auxContext** ctx, int display_precision, const string
 			}
 		default:
 			int st = aux_eval(ctx, cmd, cfg, res);
+			const auto last = cmd.find_last_not_of(" \t\r\n");
+			const bool suppressEcho = (last != string::npos && cmd[last] == ';');
 		if (st == (int)auxEvalStatus::AUX_EVAL_PAUSED) {
 			g_paused = true;
 			aux_debug_get_pause_info(*ctx, g_pauseInfo);
 			return auxDebugAction::AUX_DEBUG_NO_DEBUG;
 		}
-		cout << res << endl;
+		if (!(suppressEcho && st == (int)auxEvalStatus::AUX_EVAL_OK)) {
+			cout << res << endl;
+		}
 		break;
 	}
 	return auxDebugAction::AUX_DEBUG_NO_DEBUG;

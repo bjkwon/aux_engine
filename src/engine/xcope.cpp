@@ -956,9 +956,17 @@ void AuxScope::CompletePendingAssignmentAfterDebugResume()
 	if (!u.pending_assign_lhs)
 		return;
 
-	// Conservative completion for x = udf(...):
-	// parent RHS evaluation was interrupted by debugger pause, so bind the finalized UDF output now.
-	SetVar(u.pending_assign_lhs->str, &Sig);
+	// Parent RHS evaluation was interrupted by debugger pause.
+	// Complete the deferred LHS binding now from finalized Sig/SigExt.
+	if (u.pending_assign_lhs->type == N_VECTOR) {
+		// [out1, out2, ...] = udf(...)
+		outputbinding(u.pending_assign_lhs);
+		lhs = nullptr;
+	}
+	else {
+		// x = udf(...)
+		SetVar(u.pending_assign_lhs->str, &Sig);
+	}
 
 	u.pending_assign_lhs = nullptr;
 	u.pending_assign_rhs_call = nullptr;

@@ -485,6 +485,11 @@ int aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uin
             } else {
                 const std::string raw = show_preview(*cv, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
                 preview = strip_preview_header(raw);
+                // Scalar previews can be a single-line output where header stripping removes the value.
+                // In that case, keep the raw scalar expression result.
+                if (preview.empty() && (type & 0x000F) == 1) {
+                    preview = raw;
+                }
             }
         }
         if (!string_preview) {
@@ -687,6 +692,19 @@ int aux_get_fs(auxContext* ctx)
         return -1;  // null pointer or environment not initialized
     }
     return frame->pEnv->Fs;
+}
+
+int aux_set_fs(auxContext* ctx, int fs)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return -1;  // null pointer or environment not initialized
+    }
+    if (fs <= 0) {
+        return -2;  // invalid argument
+    }
+    frame->pEnv->Fs = fs;
+    return 0;
 }
 
 auxDebugAction  aux_handle_debug_key(auxContext* ctx, const string& instr)

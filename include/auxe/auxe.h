@@ -115,6 +115,7 @@ AUXE_API vector<int> aux_debug_view_breakpoints(auxContext* ctx, const string& u
 AUXE_API int         aux_define_udf(auxContext* ctx, const string& udfname, const string& udfpath, string& errstr);
 
 AUXE_API int aux_get_fs(auxContext* ctx);
+AUXE_API int aux_set_fs(auxContext* ctx, int fs);
 
 AUXE_API string aux_get_udfpath(auxContext* ctx);
 AUXE_API int aux_remove_udfpath(auxContext* ctx, const string& udfpath);

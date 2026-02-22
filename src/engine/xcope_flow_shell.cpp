@@ -51,6 +51,8 @@ static const AstNode* get_base_node_for_try (const AstNode* pnode, int line)
 	return NULL;
 }
 
+static void run_pending_catchback_reentry(AuxScope* scope);
+
 /* If an exception is thrown from eval(), errline or errcol value is for the eval, not the location of the eval call in the udf
 * i.e., errline or errcol is not really useful in that case. 12/21/2022
 */
@@ -89,22 +91,16 @@ CVar* AuxScope::Try_here(const AstNode* pnode, AstNode* p)
 			SetVar("errline", &msg, &Vars[name]);
 			msg.SetValue((auxtype)e.col);
 			SetVar("errcol", &msg, &Vars[name]);
-			process_statement(pnode_try->alt);
 			if (pnode_try->alt->type == T_CATCHBACK)
 			{
-				auto tblock = make_unique<AstNode>();
-				memset(tblock.get(), 0, sizeof(AstNode));
-				tblock->type = N_BLOCK;
-				tblock->next = pTryLast->next;
-				auto ttry = make_unique<AstNode>();
-				memset(ttry.get(), 0, sizeof(AstNode));
-				ttry->type = T_TRY;
-				ttry->line = pTryLast->line;
-				ttry->col = pTryLast->col;
-				ttry->child = tblock.get();
-				ttry->alt = pnode_try->alt;
-				pEnv->TRY((AuxScope*)this, ttry.get());
+				u.pending_catchback_next = pTryLast ? pTryLast->next : nullptr;
+				u.pending_catchback_alt = pnode_try->alt;
+				u.pending_catchback_line = pTryLast ? pTryLast->line : p->line;
+				u.pending_catchback_col = pTryLast ? pTryLast->col : p->col;
 			}
+			process_statement(pnode_try->alt);
+			if (pnode_try->alt->type == T_CATCHBACK)
+				run_pending_catchback_reentry(this);
 		}
 		else
 			throw e;
@@ -117,6 +113,62 @@ static bool isItBreakPoint(const vector<int>& breakpoints, int currentLine)
 	return find(breakpoints.begin(), breakpoints.end(), currentLine) != breakpoints.end();
 }
 
+static string resolve_paused_file_path(const AuxScope* scope)
+{
+	if (!scope || !scope->pEnv) return "";
+
+	// Regular UDF call path (title matches a registered UDF key).
+	auto it = scope->pEnv->udf.find(scope->u.title);
+	if (it != scope->pEnv->udf.end() && !it->second.fullname.empty())
+		return it->second.fullname;
+
+	// Local function path (title may be local while base points to the owning file).
+	auto ibase = scope->pEnv->udf.find(scope->u.base);
+	if (ibase != scope->pEnv->udf.end()) {
+		auto ilocal = ibase->second.local.find(scope->u.title);
+		if (ilocal != ibase->second.local.end() && !ilocal->second.fullname.empty())
+			return ilocal->second.fullname;
+		if (!ibase->second.fullname.empty())
+			return ibase->second.fullname;
+	}
+
+	// Fallback keeps previous behavior.
+	return scope->u.title;
+}
+
+static void run_pending_catchback_reentry(AuxScope* scope)
+{
+	if (!scope || !scope->u.pending_catchback_alt)
+		return;
+
+	const AstNode* next = scope->u.pending_catchback_next;
+	AstNode* alt = (AstNode*)scope->u.pending_catchback_alt;
+	int line = scope->u.pending_catchback_line;
+	int col = scope->u.pending_catchback_col;
+
+	scope->u.pending_catchback_next = nullptr;
+	scope->u.pending_catchback_alt = nullptr;
+	scope->u.pending_catchback_line = -1;
+	scope->u.pending_catchback_col = -1;
+
+	if (!next || !alt)
+		return;
+
+	auto tblock = make_unique<AstNode>();
+	memset(tblock.get(), 0, sizeof(AstNode));
+	tblock->type = N_BLOCK;
+	tblock->next = (AstNode*)next;
+
+	auto ttry = make_unique<AstNode>();
+	memset(ttry.get(), 0, sizeof(AstNode));
+	ttry->type = T_TRY;
+	ttry->line = line;
+	ttry->col = col;
+	ttry->child = tblock.get();
+	ttry->alt = alt;
+	scope->pEnv->TRY(scope, ttry.get());
+}
+
 void AuxScope::hold_at_break_point(const AstNode* pnode)
 {
 	if (!isItBreakPoint(pEnv->udf[u.title].DebugBreaks, pnode->line))
@@ -127,7 +179,7 @@ void AuxScope::hold_at_break_point(const AstNode* pnode)
 
 	// Record pause location somewhere accessible (new fields you add)
 	u.paused_line = pnode->line;
-	u.paused_file = u.title;      // or ev.filename
+	u.paused_file = resolve_paused_file_path(this);      // or ev.filename
 	u.paused_node = pnode;        // store pointer to resume from
 	u.debugstatus = paused;
 
@@ -149,6 +201,8 @@ void AuxScope::ResumePausedUDF()
 		linebyline(resume, true, true);
 	else
 		linebyline(resume, true, false);
+
+	run_pending_catchback_reentry(this);
 }
 
 const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_check, bool step_once)
@@ -178,7 +232,7 @@ const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_chec
 			const AstNode* next = p->next;
 			if (next) {
 				u.paused_line = next->line;
-				u.paused_file = u.title;
+				u.paused_file = resolve_paused_file_path(this);
 				u.paused_node = next;
 				u.debugstatus = paused;
 				throw this;
@@ -212,5 +266,9 @@ void AuxScope::CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargo
 	u.currentLine = pFirst->line;
 	u.paused_node = nullptr;  
 	u.paused_line = -1;
+	u.pending_catchback_next = nullptr;
+	u.pending_catchback_alt = nullptr;
+	u.pending_catchback_line = -1;
+	u.pending_catchback_col = -1;
 	linebyline(pFirst);
 }
