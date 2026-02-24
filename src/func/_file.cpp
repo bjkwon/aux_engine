@@ -87,6 +87,44 @@ static bool make_temp_wav_path(string& outPath, string& errstr)
 #endif
 }
 
+static bool read_file_binary(const string& path, vector<unsigned char>& out, string& errstr)
+{
+	FILE* fp = fopen(path.c_str(), "rb");
+	if (!fp) {
+		errstr = "File not found or cannot be opened: " + path;
+		return false;
+	}
+	if (fseek(fp, 0, SEEK_END) != 0) {
+		errstr = "Unable to seek file: " + path;
+		fclose(fp);
+		return false;
+	}
+	long sz = ftell(fp);
+	if (sz < 0) {
+		errstr = "Unable to determine file size: " + path;
+		fclose(fp);
+		return false;
+	}
+	if (fseek(fp, 0, SEEK_SET) != 0) {
+		errstr = "Unable to seek file: " + path;
+		fclose(fp);
+		return false;
+	}
+	out.clear();
+	out.resize((size_t)sz);
+	if (sz > 0) {
+		size_t got = fread(out.data(), 1, (size_t)sz, fp);
+		if (got != (size_t)sz) {
+			errstr = "Unable to read full file content: " + path;
+			fclose(fp);
+			return false;
+		}
+	}
+	fclose(fp);
+	errstr.clear();
+	return true;
+}
+
 struct ScopedTempFile
 {
 	string path;
@@ -983,6 +1021,30 @@ static int filetype(const string& fname, string& errstr)
 void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	string filename = past->Sig.str();
+	if (starts_with_http_url(filename))
+	{
+		string errstr;
+		string tempPath;
+		ScopedTempFile tempFile;
+		vector<unsigned char> bytes;
+
+		if (!make_temp_wav_path(tempPath, errstr))
+			throw exception_func(*past, pnode, errstr).raise();
+		if (!download_url_to_file(filename, tempPath, errstr))
+			throw exception_func(*past, pnode, errstr).raise();
+		tempFile.path = tempPath;
+		if (!read_file_binary(tempPath, bytes, errstr))
+			throw exception_func(*past, pnode, errstr).raise();
+
+		past->Sig.Reset(1);
+		past->Sig.bufBlockSize = 1;
+		past->Sig.UpdateBuffer(bytes.size());
+		if (!bytes.empty())
+			memcpy(past->Sig.strbuf, bytes.data(), bytes.size());
+		past->Sig.SetByte();
+		return;
+	}
+
 	string errstr, content;
 	int res = filetype(filename, errstr);
 	size_t nLines;
