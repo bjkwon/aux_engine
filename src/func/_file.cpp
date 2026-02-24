@@ -1,12 +1,100 @@
 #include "functions_common.h"
 #include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <string.h> // aux_file
 #include "_file_wav.h"
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 int str2vector(vector<string>& out, const string& in, const string& delim_chars);
 int GetFileText(const char* fname, const char* mod, string& strOut); // utils.cpp
 CSignal __resample(const CSignal& base, void* pargin, void* pargout); // from movespec.cpp; pargin is vector<CVar>
+
+static bool starts_with_http_url(const string& s)
+{
+	if (s.size() < 8) return false;
+	string lower(s);
+	transform(lower.begin(), lower.end(), lower.begin(),
+		[](unsigned char c) { return (char)tolower(c); });
+	return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
+}
+
+static string shell_quote_posix(const string& s)
+{
+	string out("'");
+	for (char c : s) {
+		if (c == '\'')
+			out += "'\\''";
+		else
+			out += c;
+	}
+	out += "'";
+	return out;
+}
+
+static bool download_url_to_file(const string& url, const string& outPath, string& errstr)
+{
+#ifdef _WIN32
+	string cmd = "powershell -NoProfile -Command \"Invoke-WebRequest -Uri ";
+	cmd += "\"" + url + "\"";
+	cmd += " -OutFile ";
+	cmd += "\"" + outPath + "\"";
+	cmd += "\"";
+	int rc = system(cmd.c_str());
+	if (rc != 0) {
+		errstr = "Unable to download URL: " + url;
+		return false;
+	}
+	return true;
+#else
+	string qUrl = shell_quote_posix(url);
+	string qOut = shell_quote_posix(outPath);
+	string curlCmd = "curl -L --fail --silent --show-error -o " + qOut + " " + qUrl + " >/dev/null 2>&1";
+	if (system(curlCmd.c_str()) == 0)
+		return true;
+	string wgetCmd = "wget -q -O " + qOut + " " + qUrl + " >/dev/null 2>&1";
+	if (system(wgetCmd.c_str()) == 0)
+		return true;
+	errstr = "Unable to download URL (curl/wget failed): " + url;
+	return false;
+#endif
+}
+
+static bool make_temp_wav_path(string& outPath, string& errstr)
+{
+#ifdef _WIN32
+	char tempPath[L_tmpnam];
+	if (!tmpnam(tempPath)) {
+		errstr = "Unable to create temporary filename for URL audio.";
+		return false;
+	}
+	outPath = string(tempPath) + ".wav";
+	return true;
+#else
+	char tmpl[] = "/tmp/aux2_wave_url_XXXXXX.wav";
+	int fd = mkstemps(tmpl, 4);
+	if (fd < 0) {
+		errstr = "Unable to create temporary file for URL audio.";
+		return false;
+	}
+	close(fd);
+	outPath = tmpl;
+	return true;
+#endif
+}
+
+struct ScopedTempFile
+{
+	string path;
+	~ScopedTempFile() {
+		if (!path.empty())
+			remove(path.c_str());
+	}
+};
 
 Cfunction set_builtin_function_wave(fGate fp)
 {
@@ -794,10 +882,21 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	string estr;
 	string filename = past->Sig.str();
+	string sourceName = filename;
+	ScopedTempFile tempWaveFile;
+	if (starts_with_http_url(filename)) {
+		string tempPath;
+		if (!make_temp_wav_path(tempPath, estr))
+			throw exception_etc(past, pnode, estr).raise();
+		if (!download_url_to_file(filename, tempPath, estr))
+			throw exception_etc(past, pnode, estr).raise();
+		tempWaveFile.path = tempPath;
+		sourceName = tempPath;
+	}
 	double beginMs = args[0].value();
 	double durMs = args[1].value();
 	WavInfo wavinfo;
-	int res = wav_read_header(filename, wavinfo, estr);
+	int res = wav_read_header(sourceName, wavinfo, estr);
 	if (!res)
 		throw exception_etc(past, pnode, estr).raise();
 
@@ -805,7 +904,7 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	past->Sig.Reset(wavinfo.sample_rate);
 	past->Sig.bufType = 'R';
 	size_t id1 = (size_t)(beginMs / 1000.f * wavinfo.sample_rate + .5);
-	FILE* fp = fopen(filename.c_str(), "rb"); // most likely success
+	FILE* fp = fopen(sourceName.c_str(), "rb"); // most likely success
 	res = fseek(fp, res + id1 * wavinfo.block_align, SEEK_SET);
 	int _frames2read;
 	size_t frames = wavinfo.data_size / wavinfo.block_align;
