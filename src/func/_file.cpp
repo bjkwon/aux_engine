@@ -23,6 +23,20 @@ static bool starts_with_http_url(const string& s)
 	return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
 }
 
+static bool starts_with_s3_url(const string& s)
+{
+	if (s.size() < 5) return false;
+	string lower(s);
+	transform(lower.begin(), lower.end(), lower.begin(),
+		[](unsigned char c) { return (char)tolower(c); });
+	return lower.rfind("s3://", 0) == 0;
+}
+
+static bool is_remote_url(const string& s)
+{
+	return starts_with_http_url(s) || starts_with_s3_url(s);
+}
+
 static string shell_quote_posix(const string& s)
 {
 	string out("'");
@@ -36,7 +50,7 @@ static string shell_quote_posix(const string& s)
 	return out;
 }
 
-static bool download_url_to_file(const string& url, const string& outPath, string& errstr)
+static bool download_http_url_to_file(const string& url, const string& outPath, string& errstr)
 {
 #ifdef _WIN32
 	string cmd = "powershell -NoProfile -Command \"Invoke-WebRequest -Uri ";
@@ -64,21 +78,54 @@ static bool download_url_to_file(const string& url, const string& outPath, strin
 #endif
 }
 
-static bool make_temp_wav_path(string& outPath, string& errstr)
+static bool download_s3_url_to_file(const string& url, const string& outPath, string& errstr)
+{
+#ifdef _WIN32
+	string cmd = "aws s3 cp \"";
+	cmd += url;
+	cmd += "\" \"";
+	cmd += outPath;
+	cmd += "\" >nul 2>&1";
+	if (system(cmd.c_str()) == 0)
+		return true;
+	errstr = "Unable to download S3 URL (aws s3 cp failed): " + url;
+	return false;
+#else
+	string qUrl = shell_quote_posix(url);
+	string qOut = shell_quote_posix(outPath);
+	string cmd = "aws s3 cp " + qUrl + " " + qOut + " >/dev/null 2>&1";
+	if (system(cmd.c_str()) == 0)
+		return true;
+	errstr = "Unable to download S3 URL (aws s3 cp failed): " + url;
+	return false;
+#endif
+}
+
+static bool download_remote_url_to_file(const string& url, const string& outPath, string& errstr)
+{
+	if (starts_with_http_url(url))
+		return download_http_url_to_file(url, outPath, errstr);
+	if (starts_with_s3_url(url))
+		return download_s3_url_to_file(url, outPath, errstr);
+	errstr = "Unsupported remote URL scheme: " + url;
+	return false;
+}
+
+static bool make_temp_remote_path(string& outPath, string& errstr)
 {
 #ifdef _WIN32
 	char tempPath[L_tmpnam];
 	if (!tmpnam(tempPath)) {
-		errstr = "Unable to create temporary filename for URL audio.";
+		errstr = "Unable to create temporary filename for remote file.";
 		return false;
 	}
-	outPath = string(tempPath) + ".wav";
+	outPath = string(tempPath) + ".tmp";
 	return true;
 #else
-	char tmpl[] = "/tmp/aux2_wave_url_XXXXXX.wav";
-	int fd = mkstemps(tmpl, 4);
+	char tmpl[] = "/tmp/aux2_remote_XXXXXX";
+	int fd = mkstemp(tmpl);
 	if (fd < 0) {
-		errstr = "Unable to create temporary file for URL audio.";
+		errstr = "Unable to create temporary file for remote file.";
 		return false;
 	}
 	close(fd);
@@ -922,11 +969,11 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	string filename = past->Sig.str();
 	string sourceName = filename;
 	ScopedTempFile tempWaveFile;
-	if (starts_with_http_url(filename)) {
+	if (is_remote_url(filename)) {
 		string tempPath;
-		if (!make_temp_wav_path(tempPath, estr))
+		if (!make_temp_remote_path(tempPath, estr))
 			throw exception_etc(past, pnode, estr).raise();
-		if (!download_url_to_file(filename, tempPath, estr))
+		if (!download_remote_url_to_file(filename, tempPath, estr))
 			throw exception_etc(past, pnode, estr).raise();
 		tempWaveFile.path = tempPath;
 		sourceName = tempPath;
@@ -1021,16 +1068,16 @@ static int filetype(const string& fname, string& errstr)
 void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	string filename = past->Sig.str();
-	if (starts_with_http_url(filename))
+	if (is_remote_url(filename))
 	{
 		string errstr;
 		string tempPath;
 		ScopedTempFile tempFile;
 		vector<unsigned char> bytes;
 
-		if (!make_temp_wav_path(tempPath, errstr))
+		if (!make_temp_remote_path(tempPath, errstr))
 			throw exception_func(*past, pnode, errstr).raise();
-		if (!download_url_to_file(filename, tempPath, errstr))
+		if (!download_remote_url_to_file(filename, tempPath, errstr))
 			throw exception_func(*past, pnode, errstr).raise();
 		tempFile.path = tempPath;
 		if (!read_file_binary(tempPath, bytes, errstr))
