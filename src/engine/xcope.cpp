@@ -838,8 +838,17 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 			throw exception_etc(*this, pCalling, "PrepareCallUDF():supposed to be a local udf, but AstNode with that name not prepared").raise();
 		son->u.t_func_base = (*udftree2).second.uxtree;
 		son->u.base = u.base; // this way, base can maintain through iteration.
-		son->u.t_func = (*pEnv->udf.find(u.base)).second.local[pCalling->str].uxtree;
+		auto itLocal = udftree2->second.local.find(pCalling->str);
+		if (itLocal == udftree2->second.local.end() || !itLocal->second.uxtree)
+		{
+			ostringstream msg;
+			msg << "Undefined local function \"" << pCalling->str << "\" in \"" << u.base << "\".";
+			throw exception_etc(*this, pCalling, msg.str()).raise();
+		}
+		son->u.t_func = itLocal->second.uxtree;
 	}
+	if (!son->u.t_func || !son->u.t_func_base)
+		throw exception_etc(*this, pCalling, "UDF parse tree is null.").raise();
 	son->node = son->u.t_func_base->child->next;
 	son->node = son->u.t_func->child->next;
 	//output argument string list
