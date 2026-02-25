@@ -113,7 +113,7 @@ void _pow(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 CTimeSeries __mod(const CTimeSeries& base, void* p)
 {
 	CTimeSeries out(base);
-	body operand = *(body*)p;
+	CSignal operand = *(CSignal*)p;
 	out.each_sym2(fmod, operand);
 	return out;
 }
@@ -124,4 +124,3 @@ void _mod(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	CVar oper = args[0];
 	past->Sig = past->Sig.evoke_getsig(&__mod, (void*)&oper);
 }
-
