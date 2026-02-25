@@ -39,6 +39,9 @@ static inline const CSignals* asCSignals(AuxObj h) {
     return reinterpret_cast<const CSignals*>(h);
 }
 
+// Defined in src/func/fft.cpp
+CSignal __fft2(auxtype* buf, unsigned int len, void* pargin, void* pargout);
+
 static DebugAction to_internal_action(auxDebugAction a)
 {
     switch (a)
@@ -333,6 +336,60 @@ bool aux_get_segment(const AuxObj& v, int channel_index, int segment_index, AuxS
     out.nSamples = seg->nSamples;
     out.nGroups = seg->nGroups;
     out.bufType = seg->bufType;
+    return true;
+}
+
+bool aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sample, int num_timeline_samples, int offset_samples, vector<double>& out_db)
+{
+    out_db.clear();
+    if (num_timeline_samples <= 0) return true;
+
+    const size_t flatLen = aux_flatten_channel_length(v, channel_index);
+    if (flatLen == 0) return true;
+    vector<auxtype> flat(flatLen, 0.0);
+    aux_flatten_channel(v, channel_index, flat.data(), flat.size());
+
+    int fs = 0;
+    AuxSignal seg0{};
+    if (aux_get_segment(v, channel_index, 0, seg0)) {
+        fs = seg0.fs;
+    }
+    if (fs <= 0) fs = 1;
+
+    CVar sig(fs);
+    sig.UpdateBuffer((uint64_t)num_timeline_samples);
+    for (int i = 0; i < num_timeline_samples; ++i) {
+        const int di = start_timeline_sample + i - offset_samples;
+        if (di >= 0 && di < static_cast<int>(flatLen)) {
+            sig.buf[i] = flat[static_cast<size_t>(di)];
+        } else {
+            sig.buf[i] = 0.0;
+        }
+    }
+
+    vector<CVar> fftArgs;
+    fftArgs.emplace_back(CVar(0.));               // use full signal length
+    fftArgs.emplace_back(CVar((auxtype)fs));      // keep fs in output object
+    CSignals fftOut = sig.evoke_getsig2(__fft2, (void*)&fftArgs, nullptr);
+
+    if (!fftOut.IsComplex() || fftOut.nSamples == 0) {
+        return false;
+    }
+
+    const size_t bins = static_cast<size_t>(fftOut.nSamples / 2 + 1);
+    out_db.assign(bins, -80.0);
+    const double n = std::max(1.0, static_cast<double>(sig.nSamples));
+    constexpr double kFloor = 1e-12;
+    for (size_t k = 0; k < bins; ++k) {
+        const double mag = std::abs(fftOut.cbuf[k]);
+        double amp = mag / n;
+        if (k > 0 && k + 1 < bins) {
+            amp *= 2.0; // one-sided amplitude for non-DC/non-Nyquist bins
+        }
+        double db = 20.0 * std::log10(std::max(kFloor, amp));
+        db = std::clamp(db, -80.0, 0.0);
+        out_db[k] = db;
+    }
     return true;
 }
 

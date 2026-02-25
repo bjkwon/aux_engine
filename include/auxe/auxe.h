@@ -101,6 +101,7 @@ AUXE_API int         aux_num_segments(const AuxObj& v, int channel_index);
 AUXE_API bool        aux_get_segment(const AuxObj& v, int channel_index, int segment_index, AuxSignal& out);
 AUXE_API size_t      aux_flatten_channel_length(const AuxObj& v, int channel_index);
 AUXE_API size_t      aux_flatten_channel(const AuxObj& v, int channel_index, auxtype* out, size_t max_len);
+AUXE_API bool        aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sample, int num_timeline_samples, int offset_samples, vector<double>& out_db);
 AUXE_API int         aux_get_vars(auxContext* ctx, vector<string>& vars);
 AUXE_API AuxObj      aux_get_var(auxContext* ctx, const string& varname);
 AUXE_API vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname);
