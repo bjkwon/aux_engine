@@ -197,7 +197,9 @@ void AuxScope::ResumePausedUDF()
 	u.paused_file.clear();
 
 	// Execute the paused line once, without stopping on the same breakpoint again.
-	if (u.debugstatus == step || u.debugstatus == step_in || u.debugstatus == step_out)
+	if (u.debugstatus == step_out)
+		linebyline(resume, true, false, true);
+	else if (u.debugstatus == step || u.debugstatus == step_in)
 		linebyline(resume, true, true);
 	else
 		linebyline(resume, true, false);
@@ -205,7 +207,7 @@ void AuxScope::ResumePausedUDF()
 	run_pending_catchback_reentry(this);
 }
 
-const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_check, bool step_once)
+const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_check, bool step_once, bool suppress_breakpoints)
 {
 	bool first = true;
 	while (p)
@@ -214,7 +216,8 @@ const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_chec
 		// T_IF, T_WHILE, T_FOR are checked here to break right at the beginning of the loop
 		u.currentLine = p->line;
 		// N_IDLIST here is probably outdated. 7/26/2023
-		if ((p->type == T_ID || p->type == T_FOR || p->type == T_IF || p->type == T_WHILE || p->type == T_SWITCH || p->type == N_IDLIST || p->type == N_VECTOR)
+		if (!suppress_breakpoints
+			&& (p->type == T_ID || p->type == T_FOR || p->type == T_IF || p->type == T_WHILE || p->type == T_SWITCH || p->type == N_IDLIST || p->type == N_VECTOR)
 			&& !(skip_first_break_check && first))
 			hold_at_break_point(p);
 		if (u.debugstatus == abort2base)
@@ -262,6 +265,14 @@ void AuxScope::CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargo
 	// If it has a single statement, take it from there.
 	AstNode* pFirst = u.t_func->child->next;
 	if (pFirst->type == N_BLOCK)	pFirst = pFirst->next;
+	// Enter callee frame at first executable line on Step In.
+	if (u.debugstatus == step_in && pFirst) {
+		u.paused_line = pFirst->line;
+		u.paused_file = resolve_paused_file_path(this);
+		u.paused_node = pFirst;
+		u.debugstatus = paused;
+		throw this;
+	}
 	//Get the range of lines for the current udf
 	u.currentLine = pFirst->line;
 	u.paused_node = nullptr;  

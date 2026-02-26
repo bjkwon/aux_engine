@@ -271,7 +271,7 @@ public:
 	void CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargout_requested);
 	void FinalizeChildUDFCall();
 	void CompletePendingAssignmentAfterDebugResume();
-	const AstNode* linebyline(const AstNode* p, bool skip_first_break_check = false, bool step_once = false);
+	const AstNode* linebyline(const AstNode* p, bool skip_first_break_check = false, bool step_once = false, bool suppress_breakpoints = false);
 	void hold_at_break_point(const AstNode* pnode);
 	void ResumePausedUDF();
 	FILE* fopen_from_path(const string& fname, const string& ext, string& fullfilename);

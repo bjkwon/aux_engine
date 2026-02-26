@@ -916,7 +916,7 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 		throw exception_etc(*this, pCalling, oss.str()).raise();
 	}
 	//son->u.nargin is the number of args specified in udf
-	if (u.debugstatus == step_in) son->u.debugstatus = step;
+	if (u.debugstatus == step_in) son->u.debugstatus = step_in;
 //	xscope.push_back(son.get());
 	// duplicating debug breakpoints in the son object
 	// why? To use AuxScope::hold_at_break_point()

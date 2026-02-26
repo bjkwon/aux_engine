@@ -56,6 +56,26 @@ static DebugAction to_internal_action(auxDebugAction a)
     }
 }
 
+static string resolve_pause_file_for_frame(const AuxScope* scope)
+{
+    if (!scope || !scope->pEnv) return "";
+
+    auto it = scope->pEnv->udf.find(scope->u.title);
+    if (it != scope->pEnv->udf.end() && !it->second.fullname.empty())
+        return it->second.fullname;
+
+    auto ibase = scope->pEnv->udf.find(scope->u.base);
+    if (ibase != scope->pEnv->udf.end()) {
+        auto ilocal = ibase->second.local.find(scope->u.title);
+        if (ilocal != ibase->second.local.end() && !ilocal->second.fullname.empty())
+            return ilocal->second.fullname;
+        if (!ibase->second.fullname.empty())
+            return ibase->second.fullname;
+    }
+
+    return scope->u.title;
+}
+
 auxContext* aux_init(auxConfig* cfg)
 {
     srand((unsigned)time(0));
@@ -817,6 +837,8 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
     AuxScope* frame = reinterpret_cast<AuxScope*>(*ctx);
     if (!frame->pEnv) return auxDebugAction::AUX_DEBUG_ABORT_BASE;
 
+    const bool step_to_caller_next =
+        (act == auxDebugAction::AUX_DEBUG_STEP_OUT || act == auxDebugAction::AUX_DEBUG_STEP);
     // Map public action to internal debugstatus
     switch (act) {
     case auxDebugAction::AUX_DEBUG_STEP:
@@ -843,6 +865,15 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
         if (parent && parent->son.get() == frame) {
             parent->FinalizeChildUDFCall();
             parent->CompletePendingAssignmentAfterDebugResume();
+            if (step_to_caller_next && parent->pLast && parent->pLast->next) {
+                const AstNode* next = parent->pLast->next;
+                parent->u.paused_line = next->line;
+                parent->u.paused_file = resolve_pause_file_for_frame(parent);
+                parent->u.paused_node = next;
+                parent->u.debugstatus = paused;
+                *ctx = reinterpret_cast<auxContext*>(parent);
+                return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+            }
             *ctx = reinterpret_cast<auxContext*>(parent);
         }
         return auxDebugAction::AUX_DEBUG_CONTINUE;
