@@ -918,11 +918,8 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	//son->u.nargin is the number of args specified in udf
 	if (u.debugstatus == step_in) son->u.debugstatus = step_in;
 //	xscope.push_back(son.get());
-	// duplicating debug breakpoints in the son object
-	// why? To use AuxScope::hold_at_break_point()
-	// this is only temporary, to be cleaned at the end of this function; or else??
-	if (level > 1)
-		son->pEnv->udf[pCalling->str].DebugBreaks = pEnv->udf[u.title].DebugBreaks;
+	// Keep each UDF's own breakpoint table. Overwriting the callee with caller breakpoints
+	// prevents breakpoints set on stepped-into child UDFs from ever triggering.
 	//son->SetVar("_________",pStaticVars); // how can I add static variables here???
 	son->CallUDF(pCalling, pBase, nargout);
 	FinalizeChildUDFCall();
