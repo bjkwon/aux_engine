@@ -4420,9 +4420,9 @@ void yyerror (AstNode **pproot, char **errmsg, char const *s)
   char msgbuf[ERRMSG_MAX], *p;
   size_t msglen;
 
-  sprintf(msgbuf, "Invalid syntax: Line %d, Col %d: %s.\n", yylloc.first_line, yylloc.first_column, s + (strncmp(s, "syntax error, ", 14) ? 0 : 14));
+  snprintf(msgbuf, sizeof(msgbuf), "Invalid syntax: Line %d, Col %d: %s.\n", yylloc.first_line, yylloc.first_column, s + (strncmp(s, "syntax error, ", 14) ? 0 : 14));
   if ((p=strstr(msgbuf, "$undefined"))) {
-	sprintf(p, "'%c'(%d)", yychar, yychar);
+	snprintf(p, ERRMSG_MAX - (size_t)(p - msgbuf), "'%c'(%d)", yychar, yychar);
     memmove(p+strlen(p), p+10, strlen(p+10)+1);
   }
   if ((p=strstr(msgbuf, "end of text or ")))
@@ -4432,8 +4432,16 @@ void yyerror (AstNode **pproot, char **errmsg, char const *s)
   msglen = strlen(msgbuf);
   if (ErrorMsg == NULL)
     errmsg_len = 0;
-  ErrorMsg = (char *)realloc(ErrorMsg, errmsg_len+msglen+1);
-  strcpy(ErrorMsg+errmsg_len, msgbuf);
+  char* new_errmsg = (char *)realloc(ErrorMsg, errmsg_len+msglen+1);
+  if (!new_errmsg) {
+    free(ErrorMsg);
+    ErrorMsg = NULL;
+    errmsg_len = 0;
+    *errmsg = (char*)"Invalid syntax: out of memory while formatting parser error.\n";
+    return;
+  }
+  ErrorMsg = new_errmsg;
+  memmove(ErrorMsg+errmsg_len, msgbuf, msglen+1);
   errmsg_len += msglen;
   *errmsg = ErrorMsg;
 }
