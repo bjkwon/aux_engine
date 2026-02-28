@@ -800,6 +800,8 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 		throw exception_etc(*this, nullptr, "Null call node in PrepareAndCallUDF().").raise();
 	if (!pCalling->str)
 		throw exception_etc(*this, pCalling, "p->str null pointer in PrepareAndCallUDF(p,...)").raise();
+	const std::string callingName = pCalling->str;
+	const int callingType = pCalling->type;
 	// Only keep pending assignment metadata when this UDF call is the whole RHS root.
 	if (!(u.pending_assign_lhs && u.pending_assign_rhs_call == pCalling)) {
 		u.pending_assign_lhs = nullptr;
@@ -808,7 +810,7 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	// Check if the same udf is called during debugging... in that case Script shoudl be checked and handled...
 
 	// Checking the number of input args used in the call
-	size_t nargs = pCalling->type==N_STRUCT ? 1 : 0;
+	size_t nargs = callingType==N_STRUCT ? 1 : 0;
 	if (pCalling->alt)
 		for (auto pp = pCalling->alt->child; pp; pp = pp->next)
 			nargs++;
@@ -817,7 +819,7 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	// pauses via exception unwind and resume happens later.
 	son.reset(new AuxScope(pEnv));
 	son->u = u;
-	son->u.title = pCalling->str;
+	son->u.title = callingName;
 	son->u.debugstatus = null;
 	son->lhs = lhs;
 	son->level = level + 1;
@@ -826,7 +828,7 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 //	son->fpmsg = fpmsg;
 	if (GOvars.find("?foc") != GOvars.end()) son->GOvars["?foc"] = GOvars["?foc"];
 	if (GOvars.find("gcf") != GOvars.end())	son->GOvars["gcf"] = GOvars["gcf"];
-	auto udftree = pEnv->udf.find(pCalling->str);
+	auto udftree = pEnv->udf.find(callingName);
 	if (udftree != pEnv->udf.end())
 	{
 		son->u.t_func = (*udftree).second.uxtree;
@@ -840,11 +842,11 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 			throw exception_etc(*this, pCalling, "PrepareCallUDF():supposed to be a local udf, but AstNode with that name not prepared").raise();
 		son->u.t_func_base = (*udftree2).second.uxtree;
 		son->u.base = u.base; // this way, base can maintain through iteration.
-		auto itLocal = udftree2->second.local.find(pCalling->str);
+		auto itLocal = udftree2->second.local.find(callingName);
 		if (itLocal == udftree2->second.local.end() || !itLocal->second.uxtree)
 		{
 			ostringstream msg;
-			msg << "Undefined local function \"" << pCalling->str << "\" in \"" << u.base << "\".";
+			msg << "Undefined local function \"" << callingName << "\" in \"" << u.base << "\".";
 			throw exception_etc(*this, pCalling, msg.str()).raise();
 		}
 		son->u.t_func = itLocal->second.uxtree;
@@ -895,12 +897,12 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	if (pa) {
 		if (pa->type == N_ARGS)
 			pa = pa->child;
-		if (pCalling->type == N_STRUCT) // if it is a dot function call, make son->u.nargin 1
+		if (callingType == N_STRUCT) // if it is a dot function call, make son->u.nargin 1
 			son->u.nargin = 1;
 	}
 	//If the line invoking the udf res = var.udf(arg1, arg2...), binding of the first arg, var, is done separately via pBase. The rest, arg1, arg2, ..., are done below with pf->next
 	pf = son->u.t_func->child->child;
-	if (pBase && pCalling->type==N_STRUCT) {
+	if (pBase && callingType==N_STRUCT) {
 		if (!pf || !pf->str) {
 			ostringstream msg;
 			msg << "Object-style call requires at least one formal input parameter in UDF \"" << son->u.t_func->str << "\".";
