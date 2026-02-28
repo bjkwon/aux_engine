@@ -796,6 +796,8 @@ CVar* AuxScope::GetVariable(const char* varname, const AstNode* pnode, CVar* pva
 
 void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pStaticVars)
 {
+	if (!pCalling)
+		throw exception_etc(*this, nullptr, "Null call node in PrepareAndCallUDF().").raise();
 	if (!pCalling->str)
 		throw exception_etc(*this, pCalling, "p->str null pointer in PrepareAndCallUDF(p,...)").raise();
 	// Only keep pending assignment metadata when this UDF call is the whole RHS root.
@@ -898,7 +900,15 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	}
 	//If the line invoking the udf res = var.udf(arg1, arg2...), binding of the first arg, var, is done separately via pBase. The rest, arg1, arg2, ..., are done below with pf->next
 	pf = son->u.t_func->child->child;
-	if (pBase && pCalling->type==N_STRUCT) { son->SetVar(pf->str, pBase); pf = pf->next; }
+	if (pBase && pCalling->type==N_STRUCT) {
+		if (!pf || !pf->str) {
+			ostringstream msg;
+			msg << "Object-style call requires at least one formal input parameter in UDF \"" << son->u.t_func->str << "\".";
+			throw exception_etc(*this, pCalling, msg.str()).raise();
+		}
+		son->SetVar(pf->str, pBase);
+		pf = pf->next;
+	}
 	//if this is for udf object function call, put that psigBase for pf->str and the rest from pa
 	for (; pa && pf; pa = pa->next, pf = pf->next)
 	{
