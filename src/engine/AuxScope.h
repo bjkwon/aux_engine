@@ -230,6 +230,8 @@ public:
 	int pending_catchback_line;
 	int pending_catchback_col;
 	DEBUG_STATUS debugstatus;
+	std::map<const AstNode*, unsigned int> debug_for_index;
+	std::map<const AstNode*, unsigned int> debug_for_count;
 	CUDF() { nextBreakPoint = currentLine = -1; pending_assign_lhs = nullptr; pending_assign_rhs_call = nullptr; paused_node = nullptr; paused_line = -1; pending_catchback_next = nullptr; pending_catchback_alt = nullptr; pending_catchback_line = -1; pending_catchback_col = -1; pLastRead = NULL; };
 	virtual ~CUDF() {};
 	AstNode* pLastRead; //used for isthisUDFscope only, to mark the last pnode processed in 

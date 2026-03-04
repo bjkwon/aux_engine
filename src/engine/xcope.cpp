@@ -801,6 +801,12 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	if (!pCalling->str)
 		throw exception_etc(*this, pCalling, "p->str null pointer in PrepareAndCallUDF(p,...)").raise();
 	const std::string callingName = pCalling->str;
+	std::string lookupName = callingName;
+	std::transform(lookupName.begin(), lookupName.end(), lookupName.begin(), ::tolower);
+	std::string baseLookup = u.base;
+	if (baseLookup.empty() && u.t_func_base && u.t_func_base->str)
+		baseLookup = u.t_func_base->str;
+	std::transform(baseLookup.begin(), baseLookup.end(), baseLookup.begin(), ::tolower);
 	const int callingType = pCalling->type;
 	// Only keep pending assignment metadata when this UDF call is the whole RHS root.
 	if (!(u.pending_assign_lhs && u.pending_assign_rhs_call == pCalling)) {
@@ -828,21 +834,55 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 //	son->fpmsg = fpmsg;
 	if (GOvars.find("?foc") != GOvars.end()) son->GOvars["?foc"] = GOvars["?foc"];
 	if (GOvars.find("gcf") != GOvars.end())	son->GOvars["gcf"] = GOvars["gcf"];
-	auto udftree = pEnv->udf.find(callingName);
-	if (udftree != pEnv->udf.end())
-	{
-		son->u.t_func = (*udftree).second.uxtree;
-		son->u.t_func_base = son->u.t_func;
-		son->u.base = son->u.t_func->str;
+	// Keep lookup precedence aligned with ReadUDF(): local function first, then global UDF.
+	bool resolved = false;
+	if (!baseLookup.empty()) {
+		auto udftreeBase = pEnv->udf.find(baseLookup);
+		if (udftreeBase != pEnv->udf.end()) {
+			auto itLocal = udftreeBase->second.local.find(lookupName);
+			if (itLocal != udftreeBase->second.local.end()) {
+				son->u.t_func_base = udftreeBase->second.uxtree;
+				son->u.base = baseLookup;
+				son->u.t_func = itLocal->second.uxtree;
+				if (!son->u.t_func || !son->u.t_func_base) {
+					ostringstream msg;
+					msg << "UDF parse tree is null for function \"" << callingName << "\".";
+					throw exception_etc(*this, pCalling, msg.str()).raise();
+				}
+				resolved = true;
+			}
+		}
 	}
-	else
+	if (!resolved)
 	{
-		auto udftree2 = pEnv->udf.find(u.base); // if this is to be a local udf, base should be ready through a previous iteration.
+		auto udftree = pEnv->udf.find(lookupName);
+		if (udftree != pEnv->udf.end()) {
+			son->u.t_func = (*udftree).second.uxtree;
+			if (!son->u.t_func)
+			{
+				ostringstream msg;
+				msg << "UDF parse tree is null for function \"" << callingName << "\".";
+				throw exception_etc(*this, pCalling, msg.str()).raise();
+			}
+			son->u.t_func_base = son->u.t_func;
+			if (!son->u.t_func->str)
+			{
+				ostringstream msg;
+				msg << "UDF base metadata missing for function \"" << callingName << "\".";
+				throw exception_etc(*this, pCalling, msg.str()).raise();
+			}
+			son->u.base = son->u.t_func->str;
+			resolved = true;
+		}
+	}
+	if (!resolved)
+	{
+		auto udftree2 = pEnv->udf.find(baseLookup); // if this is to be a local udf, base should be ready through a previous iteration.
 		if (udftree2 == pEnv->udf.end())
 			throw exception_etc(*this, pCalling, "PrepareCallUDF():supposed to be a local udf, but AstNode with that name not prepared").raise();
 		son->u.t_func_base = (*udftree2).second.uxtree;
-		son->u.base = u.base; // this way, base can maintain through iteration.
-		auto itLocal = udftree2->second.local.find(callingName);
+		son->u.base = baseLookup; // this way, base can maintain through iteration.
+		auto itLocal = udftree2->second.local.find(lookupName);
 		if (itLocal == udftree2->second.local.end() || !itLocal->second.uxtree)
 		{
 			ostringstream msg;
@@ -943,6 +983,9 @@ void AuxScope::FinalizeChildUDFCall()
 {
 	if (!son)
 		return;
+	// Each UDF call must publish a fresh output bundle.
+	// Without clearing SigExt here, repeated multi-output calls can bind stale values.
+	SigExt.clear();
 
 	if (son->u.argout.empty())
 		Sig.Reset();

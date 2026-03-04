@@ -41,6 +41,7 @@ AstNode* AuxScope::goto_line(const AstNode* pnode, int line)
 
 bool AuxScope::IsLooping(const AstNode* pnode)
 {
+	if (!pnode) return false;
 	if (pnode->type == T_IF || pnode->type == T_FOR || pnode->type == T_WHILE) return true;
 	return false;
 }

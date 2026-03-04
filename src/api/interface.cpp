@@ -76,6 +76,108 @@ static string resolve_pause_file_for_frame(const AuxScope* scope)
     return scope->u.title;
 }
 
+static bool is_statement_pause_candidate(int type)
+{
+    return type == T_ID
+        || type == T_IF
+        || type == T_FOR
+        || type == T_WHILE
+        || type == T_SWITCH
+        || type == T_TRY
+        || type == T_CATCH
+        || type == T_CATCHBACK
+        || type == T_BREAK
+        || type == T_RETURN
+        || type == N_VECTOR
+        || type == N_IDLIST;
+}
+
+static void find_min_statement_line_gt(const AstNode* p, int line, const AstNode*& best)
+{
+    for (const AstNode* cur = p; cur; cur = cur->next) {
+        if (cur->line > line && is_statement_pause_candidate(cur->type)) {
+            if (!best || cur->line < best->line)
+                best = cur;
+        }
+        if (cur->child)
+            find_min_statement_line_gt(cur->child, line, best);
+        if (cur->alt)
+            find_min_statement_line_gt(cur->alt, line, best);
+    }
+}
+
+static const AstNode* resolve_next_statement_after_line(const AuxScope* scope, int line)
+{
+    if (!scope || !scope->u.t_func || line <= 0)
+        return nullptr;
+    const AstNode* root = scope->u.t_func->child ? scope->u.t_func->child->next : nullptr;
+    if (!root)
+        return nullptr;
+    const AstNode* best = nullptr;
+    find_min_statement_line_gt(root, line, best);
+    return best;
+}
+
+static const AstNode* find_enclosing_switch_by_line(const AstNode* root, int line)
+{
+    if (!root || line <= 0)
+        return nullptr;
+
+    const AstNode* best = nullptr;
+    for (const AstNode* p = root; p; p = p->next) {
+        if (p->type == T_SWITCH) {
+            for (const AstNode* c = p->alt; c; c = (c->next ? c->next->alt : nullptr)) {
+                const AstNode* body = c->next;
+                if (!body) continue;
+                AstNode* hit = AuxScope::goto_line(body, line);
+                if (hit && hit->line == line) {
+                    best = p;
+                    break;
+                }
+            }
+        }
+        if (const AstNode* inner = find_enclosing_switch_by_line(p->child, line))
+            best = inner;
+        if (const AstNode* inner = find_enclosing_switch_by_line(p->alt, line))
+            best = inner;
+    }
+    return best;
+}
+
+static std::string to_lower_copy(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    return s;
+}
+
+static UDF* resolve_udf_for_breakpoint(AuxScope* frame, const std::string& udfname)
+{
+    if (!frame || !frame->pEnv) return nullptr;
+    auto& env = *frame->pEnv;
+
+    const std::string key = to_lower_copy(udfname);
+    auto it = env.udf.find(key);
+    if (it != env.udf.end()) {
+        return &it->second;
+    }
+
+    std::string base = frame->u.base;
+    if (base.empty() && frame->u.t_func_base && frame->u.t_func_base->str) {
+        base = frame->u.t_func_base->str;
+    }
+    base = to_lower_copy(base);
+    if (base.empty()) return nullptr;
+
+    auto ibase = env.udf.find(base);
+    if (ibase == env.udf.end()) return nullptr;
+
+    auto ilocal = ibase->second.local.find(key);
+    if (ilocal != ibase->second.local.end()) {
+        return &ilocal->second;
+    }
+    return nullptr;
+}
+
 auxContext* aux_init(auxConfig* cfg)
 {
     srand((unsigned)time(0));
@@ -598,9 +700,8 @@ int aux_debug_add_breakpoints(auxContext* ctx, const string& udfname, const vect
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
-    auto& env = *frame->pEnv;
-    auto it = env.udf.find(udfname);
-    if (it == env.udf.end()) {
+    UDF* target = resolve_udf_for_breakpoint(frame, udfname);
+    if (!target) {
         return 2; // udfname not found
     }
 
@@ -608,13 +709,14 @@ int aux_debug_add_breakpoints(auxContext* ctx, const string& udfname, const vect
         return 0; // nothing to add
     }
 
-    auto& breaks = it->second.DebugBreaks;
+    auto& breaks = target->DebugBreaks;
 
     int added = 0;
     for (int line : lines) {
-        // Assume line values are valid, but avoid duplicates
-        if (std::find(breaks.begin(), breaks.end(), line) == breaks.end()) {
-            breaks.push_back(line);
+        const int norm = std::abs(line);
+        if (norm <= 0) continue;
+        if (std::find_if(breaks.begin(), breaks.end(), [norm](int bp) { return std::abs(bp) == norm; }) == breaks.end()) {
+            breaks.push_back(norm);
             ++added;
         }
     }
@@ -630,13 +732,12 @@ int aux_debug_del_breakpoints(auxContext* ctx, const string& udfname, const vect
     if (!ctx || !frame->pEnv) {
         return -1;  // null pointer or environment not initialized
     }
-    auto& env = *frame->pEnv;
-    auto it = env.udf.find(udfname);
-    if (it == env.udf.end()) {
+    UDF* target = resolve_udf_for_breakpoint(frame, udfname);
+    if (!target) {
         return 2; // udfname not found
     }
 
-    auto& breaks = it->second.DebugBreaks;
+    auto& breaks = target->DebugBreaks;
     if (lines.empty()) {
         return 0; // nothing to do
     }
@@ -650,7 +751,10 @@ int aux_debug_del_breakpoints(auxContext* ctx, const string& udfname, const vect
     }
     int removed = 0;
     for (int line : lines) {
-        auto jt = std::find(breaks.begin(), breaks.end(), -line);
+        const int norm = std::abs(line);
+        if (norm <= 0) continue;
+        auto jt = std::find_if(breaks.begin(), breaks.end(),
+            [norm](int bp) { return std::abs(bp) == norm; });
         if (jt != breaks.end()) {
             breaks.erase(jt);
             ++removed;
@@ -669,12 +773,11 @@ vector<int> aux_debug_view_breakpoints(auxContext* ctx, const string& udfname, v
     if (!ctx || !frame->pEnv) {
         return out;  // null pointer or environment not initialized; returns with zero length
     }
-    auto& env = *frame->pEnv;
-    auto it = env.udf.find(udfname);
-    if (it == env.udf.end()) {
+    UDF* target = resolve_udf_for_breakpoint(frame, udfname);
+    if (!target) {
         return out; // udfname not found
     }
-    return it->second.DebugBreaks;
+    return target->DebugBreaks;
 }
 
 int aux_define_udf(auxContext* ctx, const string& udfname, const string& udfpath, string& errstr)
@@ -837,8 +940,22 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
     AuxScope* frame = reinterpret_cast<AuxScope*>(*ctx);
     if (!frame->pEnv) return auxDebugAction::AUX_DEBUG_ABORT_BASE;
 
+    auto abort_to_base_with_error = [&](AuxScope* current, const std::string& msg) -> auxDebugAction {
+        AuxScope* base = current ? current : frame;
+        while (base && base->dad) base = base->dad;
+        if (base) {
+            base->emsg = msg;
+            base->statusMsg = msg;
+            base->son.reset();
+            *ctx = reinterpret_cast<auxContext*>(base);
+        }
+        return auxDebugAction::AUX_DEBUG_ABORT_BASE;
+    };
+
     const bool step_to_caller_next =
-        (act == auxDebugAction::AUX_DEBUG_STEP_OUT || act == auxDebugAction::AUX_DEBUG_STEP);
+        (act == auxDebugAction::AUX_DEBUG_STEP_OUT
+            || act == auxDebugAction::AUX_DEBUG_STEP
+            || act == auxDebugAction::AUX_DEBUG_STEP_IN);
     // Map public action to internal debugstatus
     switch (act) {
     case auxDebugAction::AUX_DEBUG_STEP:
@@ -863,16 +980,73 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
         frame->ResumePausedUDF();
         AuxScope* parent = frame->dad;
         if (parent && parent->son.get() == frame) {
+            // Capture caller execution-site hints before child finalization mutates state.
+            const AstNode* caller_resume = parent->u.pending_assign_rhs_call
+                ? parent->u.pending_assign_rhs_call
+                : parent->pLast;
+            const int caller_line_hint = caller_resume
+                ? caller_resume->line
+                : parent->u.currentLine;
+            const AstNode* caller_next = (parent->pLast && parent->pLast->next
+                && parent->pLast->next->line > caller_line_hint)
+                ? parent->pLast->next
+                : nullptr;
+            const AstNode* caller_line_next = nullptr;
+            if (parent->u.t_func && caller_line_hint > 0) {
+                AstNode* cur = parent->goto_line(parent->u.t_func->child->next, caller_line_hint);
+                if (cur && cur->line == caller_line_hint && cur->next
+                    && cur->next->line > caller_line_hint)
+                    caller_line_next = cur->next;
+            }
+            const AstNode* caller_strict_next = resolve_next_statement_after_line(parent, caller_line_hint);
+            const AstNode* caller_switch_next = nullptr;
+            if (parent->u.t_func && caller_line_hint > 0) {
+                const AstNode* root = parent->u.t_func->child ? parent->u.t_func->child->next : nullptr;
+                const AstNode* sw = find_enclosing_switch_by_line(root, caller_line_hint);
+                if (sw && sw->next)
+                    caller_switch_next = sw->next;
+            }
+
             parent->FinalizeChildUDFCall();
             parent->CompletePendingAssignmentAfterDebugResume();
-            if (step_to_caller_next && parent->pLast && parent->pLast->next) {
-                const AstNode* next = parent->pLast->next;
-                parent->u.paused_line = next->line;
-                parent->u.paused_file = resolve_pause_file_for_frame(parent);
-                parent->u.paused_node = next;
-                parent->u.debugstatus = paused;
-                *ctx = reinterpret_cast<auxContext*>(parent);
-                return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+            if (step_to_caller_next) {
+                const AstNode* pause_node = caller_switch_next ? caller_switch_next : caller_strict_next;
+                if (!pause_node)
+                    pause_node = caller_next;
+                if (!pause_node)
+                    pause_node = caller_line_next;
+                if (!pause_node)
+                    pause_node = caller_resume;
+
+                if (!pause_node && parent->pLast) {
+                    pause_node = parent->pLast;
+                }
+                if (!pause_node && parent->u.t_func && caller_line_hint > 0) {
+                    AstNode* cur = parent->goto_line(parent->u.t_func->child->next, caller_line_hint);
+                    if (cur && cur->line > 0) {
+                        pause_node = cur;
+                    }
+                }
+                if (!pause_node && parent->u.t_func && parent->u.currentLine > 0) {
+                    AstNode* cur = parent->goto_line(parent->u.t_func->child->next, parent->u.currentLine);
+                    if (cur && cur->line > 0) {
+                        pause_node = cur;
+                    }
+                }
+                if (pause_node && caller_line_hint > 0 && pause_node->line <= caller_line_hint) {
+                    const AstNode* forced_next = resolve_next_statement_after_line(parent, caller_line_hint);
+                    if (forced_next)
+                        pause_node = forced_next;
+                }
+
+                if (pause_node) {
+                    parent->u.paused_line = pause_node->line;
+                    parent->u.paused_file = resolve_pause_file_for_frame(parent);
+                    parent->u.paused_node = pause_node;
+                    parent->u.debugstatus = paused;
+                    *ctx = reinterpret_cast<auxContext*>(parent);
+                    return auxDebugAction::AUX_DEBUG_NO_DEBUG;
+                }
             }
             *ctx = reinterpret_cast<auxContext*>(parent);
         }
@@ -893,6 +1067,18 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
         }
         *ctx = reinterpret_cast<auxContext*>(ast);
         return auxDebugAction::AUX_DEBUG_ABORT_BASE;
+    }
+    catch (const AuxScope_exception& e) {
+        return abort_to_base_with_error(frame, e.getErrMsg());
+    }
+    catch (const char* msg) {
+        return abort_to_base_with_error(frame, msg ? msg : "Unknown engine error during debug resume.");
+    }
+    catch (const std::exception& e) {
+        return abort_to_base_with_error(frame, e.what() ? e.what() : "std::exception during debug resume.");
+    }
+    catch (...) {
+        return abort_to_base_with_error(frame, "Unknown engine error during debug resume.");
     }
 }
 

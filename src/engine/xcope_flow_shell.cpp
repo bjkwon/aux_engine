@@ -53,6 +53,91 @@ static const AstNode* get_base_node_for_try (const AstNode* pnode, int line)
 
 static void run_pending_catchback_reentry(AuxScope* scope);
 
+
+static bool subtree_has_line(const AstNode* root, int line)
+{
+	if (!root || line <= 0) return false;
+	for (const AstNode* p = root; p; p = p->next) {
+		if (p->line == line)
+			return true;
+		if (subtree_has_line(p->child, line))
+			return true;
+		if (subtree_has_line(p->alt, line))
+			return true;
+	}
+	return false;
+}
+
+static const AstNode* find_enclosing_loop_by_line(const AstNode* root, int line)
+{
+	if (!root || line <= 0) return nullptr;
+	const AstNode* best = nullptr;
+	for (const AstNode* p = root; p; p = p->next) {
+		if (p->type == T_WHILE || p->type == T_FOR) {
+			if (subtree_has_line(p->alt, line)) {
+				best = p;
+				if (const AstNode* inner = find_enclosing_loop_by_line(p->alt, line))
+					best = inner;
+			}
+		}
+		if (const AstNode* inner = find_enclosing_loop_by_line(p->child, line))
+			best = inner;
+		if (const AstNode* inner = find_enclosing_loop_by_line(p->alt, line))
+			best = inner;
+	}
+	return best;
+}
+
+static const AstNode* find_enclosing_if_by_line(const AstNode* root, int line)
+{
+	if (!root || line <= 0) return nullptr;
+	const AstNode* best = nullptr;
+	for (const AstNode* p = root; p; p = p->next) {
+		if (p->type == T_IF && p->child) {
+			AstNode* hit_true = AuxScope::goto_line(p->child->next, line);
+			AstNode* hit_else = p->alt ? AuxScope::goto_line(p->alt, line) : nullptr;
+			if ((hit_true && hit_true->line == line) || (hit_else && hit_else->line == line)) {
+				best = p;
+				if (const AstNode* inner = find_enclosing_if_by_line(p->child->next, line))
+					best = inner;
+				else if (p->alt) {
+					if (const AstNode* inner_else = find_enclosing_if_by_line(p->alt, line))
+						best = inner_else;
+				}
+			}
+		}
+		if (const AstNode* inner = find_enclosing_if_by_line(p->child, line))
+			best = inner;
+		if (const AstNode* inner = find_enclosing_if_by_line(p->alt, line))
+			best = inner;
+	}
+	return best;
+}
+
+static const AstNode* find_enclosing_switch_by_line(const AstNode* root, int line)
+{
+	if (!root || line <= 0) return nullptr;
+	const AstNode* best = nullptr;
+	for (const AstNode* p = root; p; p = p->next) {
+		if (p->type == T_SWITCH) {
+			for (const AstNode* c = p->alt; c; c = (c->next ? c->next->alt : nullptr)) {
+				const AstNode* body = c->next;
+				if (!body) continue;
+				AstNode* hit = AuxScope::goto_line(body, line);
+				if (hit && hit->line == line) {
+					best = p;
+					break;
+				}
+			}
+		}
+		if (const AstNode* inner = find_enclosing_switch_by_line(p->child, line))
+			best = inner;
+		if (const AstNode* inner = find_enclosing_switch_by_line(p->alt, line))
+			best = inner;
+	}
+	return best;
+}
+
 /* If an exception is thrown from eval(), errline or errcol value is for the eval, not the location of the eval call in the udf
 * i.e., errline or errcol is not really useful in that case. 12/21/2022
 */
@@ -110,7 +195,70 @@ CVar* AuxScope::Try_here(const AstNode* pnode, AstNode* p)
 
 static bool isItBreakPoint(const vector<int>& breakpoints, int currentLine)
 {
-	return find(breakpoints.begin(), breakpoints.end(), currentLine) != breakpoints.end();
+	const int line = std::abs(currentLine);
+	for (int bp : breakpoints) {
+		if (std::abs(bp) == line) return true;
+	}
+	return false;
+}
+
+static std::string to_lower_copy(std::string s)
+{
+	std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+	return s;
+}
+
+static const std::vector<int>* resolve_breakpoints_for_scope(const AuxScope* scope)
+{
+	if (!scope || !scope->pEnv) return nullptr;
+	auto& udf = scope->pEnv->udf;
+	std::string title = to_lower_copy(scope->u.title);
+	auto it = udf.find(title);
+	if (it != udf.end())
+		return &it->second.DebugBreaks;
+
+	std::string base = scope->u.base;
+	if (base.empty() && scope->u.t_func_base && scope->u.t_func_base->str)
+		base = scope->u.t_func_base->str;
+	base = to_lower_copy(base);
+	if (base.empty()) return nullptr;
+
+	auto ibase = udf.find(base);
+	if (ibase == udf.end()) return nullptr;
+	auto ilocal = ibase->second.local.find(title);
+	if (ilocal != ibase->second.local.end() && !ilocal->second.DebugBreaks.empty())
+		return &ilocal->second.DebugBreaks;
+	if (!ibase->second.DebugBreaks.empty())
+		return &ibase->second.DebugBreaks;
+	if (ilocal != ibase->second.local.end())
+		return &ilocal->second.DebugBreaks;
+	return nullptr;
+}
+
+static bool has_breakpoint_for_scope_line(const AuxScope* scope, int line)
+{
+	if (!scope || !scope->pEnv || line <= 0) return false;
+	auto& udf = scope->pEnv->udf;
+	const std::string title = to_lower_copy(scope->u.title);
+	auto it = udf.find(title);
+	if (it != udf.end() && isItBreakPoint(it->second.DebugBreaks, line))
+		return true;
+
+	std::string base = scope->u.base;
+	if (base.empty() && scope->u.t_func_base && scope->u.t_func_base->str)
+		base = scope->u.t_func_base->str;
+	base = to_lower_copy(base);
+	if (base.empty()) return false;
+
+	auto ibase = udf.find(base);
+	if (ibase == udf.end()) return false;
+	if (isItBreakPoint(ibase->second.DebugBreaks, line))
+		return true;
+	for (const auto& kv : ibase->second.local) {
+		if (isItBreakPoint(kv.second.DebugBreaks, line))
+			return true;
+	}
+	return false;
 }
 
 static string resolve_paused_file_path(const AuxScope* scope)
@@ -171,7 +319,7 @@ static void run_pending_catchback_reentry(AuxScope* scope)
 
 void AuxScope::hold_at_break_point(const AstNode* pnode)
 {
-	if (!isItBreakPoint(pEnv->udf[u.title].DebugBreaks, pnode->line))
+	if (!has_breakpoint_for_scope_line(this, pnode->line))
 		return;
 
 	// If stepping-in just landed, switch back to progress (your current behavior)
@@ -184,13 +332,19 @@ void AuxScope::hold_at_break_point(const AstNode* pnode)
 	u.debugstatus = paused;
 
 	// Instead of calling debug_hook synchronously, unwind to aux_eval caller.
-	throw this; // You already use throw this for abort2base; we’ll distinguish by debugstatus
+	throw this; // You already use throw this for abort2base; we'll distinguish by debugstatus
 }
 
 void AuxScope::ResumePausedUDF()
 {
 	const AstNode* resume = u.paused_node;
 	if (!resume) return;
+
+	const bool resume_has_next = (resume->next != nullptr);
+	const AstNode* root = (u.t_func ? (const AstNode*)u.t_func : (const AstNode*)u.t_func_base);
+	const AstNode* resume_loop = find_enclosing_loop_by_line(root, resume->line);
+	const AstNode* resume_switch = find_enclosing_switch_by_line(root, resume->line);
+	const bool do_continue = (u.debugstatus == progress || u.debugstatus == continu);
 
 	u.paused_node = nullptr;
 	u.paused_line = -1;
@@ -205,6 +359,18 @@ void AuxScope::ResumePausedUDF()
 		linebyline(resume, true, false);
 
 	run_pending_catchback_reentry(this);
+
+	// Continue from inside switch-case should first continue to the statement
+	// after switch (e.g., lines 67/68).
+	if (do_continue && resume_switch && resume_switch->next) {
+		linebyline(resume_switch->next, true, false);
+		run_pending_catchback_reentry(this);
+	}
+	// Then continue loop progression from enclosing loop header.
+	if (do_continue && resume_loop) {
+		linebyline(resume_loop, true, false);
+		run_pending_catchback_reentry(this);
+	}
 }
 
 const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_check, bool step_once, bool suppress_breakpoints)
@@ -217,7 +383,7 @@ const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_chec
 		u.currentLine = p->line;
 		// N_IDLIST here is probably outdated. 7/26/2023
 		if (!suppress_breakpoints
-			&& (p->type == T_ID || p->type == T_FOR || p->type == T_IF || p->type == T_WHILE || p->type == T_SWITCH || p->type == N_IDLIST || p->type == N_VECTOR)
+			&& p->line > 0
 			&& !(skip_first_break_check && first))
 			hold_at_break_point(p);
 		if (u.debugstatus == abort2base)
@@ -231,12 +397,83 @@ const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_chec
 		Sig.Reset(1); // without this, fs=3 lingers on the next line; if Sig is a cell or struct, it lingers on the next line and may cause an error
 		if (fExit) return p;
 
-		if (step_once && p->next) {
+		if (step_once) {
 			const AstNode* next = p->next;
 			if (next) {
 				u.paused_line = next->line;
 				u.paused_file = resolve_paused_file_path(this);
 				u.paused_node = next;
+				u.debugstatus = paused;
+				throw this;
+			}
+			// End of a nested block in step mode: if we are inside a loop body,
+			// move to the next logical execution point.
+			const AstNode* root = (u.t_func ? (const AstNode*)u.t_func : (const AstNode*)u.t_func_base);
+			const AstNode* sw_parent0 = find_enclosing_switch_by_line(root, p->line);
+			if (sw_parent0 && sw_parent0->next) {
+				u.paused_line = sw_parent0->next->line;
+				u.paused_file = resolve_paused_file_path(this);
+				u.paused_node = sw_parent0->next;
+				u.debugstatus = paused;
+				throw this;
+			}
+			const AstNode* loop_parent = find_enclosing_loop_by_line(root, p->line);
+			if (loop_parent) {
+				const AstNode* target = nullptr;
+				if (loop_parent->type == T_WHILE) {
+					const bool cond_true = checkcond(loop_parent->child);
+					if (cond_true) {
+						if (loop_parent->alt && loop_parent->alt->type == N_BLOCK)
+							target = loop_parent->alt->next;
+						else
+							target = loop_parent->alt;
+					} else {
+						target = loop_parent->next;
+					}
+				} else {
+					auto it_idx = u.debug_for_index.find(loop_parent);
+					auto it_cnt = u.debug_for_count.find(loop_parent);
+					if (it_idx != u.debug_for_index.end() && it_cnt != u.debug_for_count.end()) {
+						const unsigned int next_idx = it_idx->second + 1;
+						it_idx->second = next_idx;
+						if (!fExit && !fBreak && next_idx < it_cnt->second) {
+							// Next step should return to for-header, matching user expectation
+							// and keeping iteration advancement deterministic.
+							target = loop_parent;
+						}
+						else {
+							u.debug_for_index.erase(loop_parent);
+							u.debug_for_count.erase(loop_parent);
+							target = loop_parent->next;
+						}
+					}
+					else {
+						// No persisted for-loop debug state (e.g., pause came from breakpoint
+						// inside loop body). Return to loop header and recover state there.
+						target = loop_parent;
+					}
+				}
+				if (target) {
+					u.paused_line = target->line;
+					u.paused_file = resolve_paused_file_path(this);
+					u.paused_node = target;
+					u.debugstatus = paused;
+					throw this;
+				}
+			}
+			const AstNode* if_parent = find_enclosing_if_by_line(root, p->line);
+			if (if_parent && if_parent->next) {
+				u.paused_line = if_parent->next->line;
+				u.paused_file = resolve_paused_file_path(this);
+				u.paused_node = if_parent->next;
+				u.debugstatus = paused;
+				throw this;
+			}
+			const AstNode* sw_parent = find_enclosing_switch_by_line(root, p->line);
+			if (sw_parent && sw_parent->next) {
+				u.paused_line = sw_parent->next->line;
+				u.paused_file = resolve_paused_file_path(this);
+				u.paused_node = sw_parent->next;
 				u.debugstatus = paused;
 				throw this;
 			}
@@ -281,5 +518,7 @@ void AuxScope::CallUDF(const AstNode* pnode4UDFcalled, CVar* pBase, size_t nargo
 	u.pending_catchback_alt = nullptr;
 	u.pending_catchback_line = -1;
 	u.pending_catchback_col = -1;
+	u.debug_for_index.clear();
+	u.debug_for_count.clear();
 	linebyline(pFirst);
 }

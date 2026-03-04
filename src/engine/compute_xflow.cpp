@@ -5,6 +5,26 @@
 #include "utils.h"
 #include <assert.h>
 
+static std::string resolve_pause_file_for_scope(const AuxScope* scope)
+{
+	if (!scope || !scope->pEnv) return "";
+
+	auto it = scope->pEnv->udf.find(scope->u.title);
+	if (it != scope->pEnv->udf.end() && !it->second.fullname.empty())
+		return it->second.fullname;
+
+	auto ibase = scope->pEnv->udf.find(scope->u.base);
+	if (ibase != scope->pEnv->udf.end()) {
+		auto ilocal = ibase->second.local.find(scope->u.title);
+		if (ilocal != ibase->second.local.end() && !ilocal->second.fullname.empty())
+			return ilocal->second.fullname;
+		if (!ibase->second.fullname.empty())
+			return ibase->second.fullname;
+	}
+
+	return scope->u.title;
+}
+
 CVar* EngineRuntime::BLOCK(AuxScope* psk, const AstNode* pnode)
 {
 	psk->linebyline(pnode->next);
@@ -18,10 +38,61 @@ CVar* EngineRuntime::FOR(AuxScope* psk, const AstNode* pnode)
 	CVar isig = psk->Compute(p->child);
 	//isig must be a vector
 	ensureVector3(*psk, p, isig, "For-loop index variable must be a vector.");
-	//If index variable already exists in the scope, throw
-	if (psk->GetVariable(p->str, NULL))
+	const bool step_mode = (psk->u.debugstatus == step || psk->u.debugstatus == step_in);
+	const bool debug_continue_mode = (psk->u.debugstatus == progress || psk->u.debugstatus == continu);
+	const bool has_debug_state = (psk->u.debug_for_count.find(pnode) != psk->u.debug_for_count.end());
+	CVar* existing_index_var = psk->GetVariable(p->str, NULL);
+	// If index variable already exists in the scope, throw, unless this is a
+	// debugger-driven continuation of the same for-loop.
+	if (existing_index_var && !(step_mode && has_debug_state) && !debug_continue_mode)
 		exception_etc(*psk, p, " ""for"" Index variable already exists outside the for loop").raise();
-	for (unsigned int i = 0; i < isig.nSamples && !psk->fExit && !psk->fBreak; i++)
+	if (step_mode)
+	{
+		// Step mode: execute one iteration at a time while preserving per-loop index state.
+		auto it_idx = psk->u.debug_for_index.find(pnode);
+		unsigned int idx = (it_idx == psk->u.debug_for_index.end()) ? 0u : it_idx->second;
+		if (it_idx == psk->u.debug_for_index.end() && existing_index_var && isig.nSamples > 0) {
+			// Breakpoint-driven stepping can land at loop tail without prior debug_for_index.
+			// Recover next iteration index from the current loop variable value.
+			for (unsigned int i = 0; i < isig.nSamples; ++i) {
+				if (isig.buf[i] == existing_index_var->value()) {
+					idx = i + 1;
+					break;
+				}
+			}
+		}
+		psk->u.debug_for_count[pnode] = isig.nSamples;
+
+		if (idx < isig.nSamples && !psk->fExit && !psk->fBreak) {
+			CVar tp(isig.buf[idx]);
+			psk->SetVar(p->str, &tp);
+			psk->u.debug_for_index[pnode] = idx;
+			if (pnode->alt && pnode->alt->type == N_BLOCK)
+				psk->linebyline(pnode->alt->next, false, true);
+			else
+				psk->process_statement(pnode->alt);
+		}
+		else {
+			psk->u.debug_for_index.erase(pnode);
+			psk->u.debug_for_count.erase(pnode);
+		}
+		psk->fBreak = false;
+		return &psk->Sig;
+	}
+	psk->u.debug_for_index.erase(pnode);
+	psk->u.debug_for_count.erase(pnode);
+	unsigned int start_idx = 0;
+	if (debug_continue_mode && existing_index_var && isig.nSamples > 0) {
+		// Continue from a paused loop-body line should resume from next iteration,
+		// not restart from the first element.
+		for (unsigned int i = 0; i < isig.nSamples; ++i) {
+			if (isig.buf[i] == existing_index_var->value()) {
+				start_idx = i + 1;
+				break;
+			}
+		}
+	}
+	for (unsigned int i = start_idx; i < isig.nSamples && !psk->fExit && !psk->fBreak; i++)
 	{
 		CVar tp(isig.buf[i]);
 		psk->SetVar(p->str, &tp); // This is OK, SetVar of non-GO object always makes a duplicate object (as opposed to SetVar of Go obj grabbing the reference)
@@ -40,10 +111,19 @@ CVar* EngineRuntime::IF(AuxScope* psk, const AstNode* pnode)
 	if (pnode) {
 		AstNode* p = pnode->child;
 		psk->pLast = p;
-		if (psk->checkcond(p))
-			psk->process_statement(p->next);
-		else if (pnode->alt)
-			psk->process_statement(pnode->alt);
+		const bool step_mode = (psk->u.debugstatus == step || psk->u.debugstatus == step_in);
+		if (psk->checkcond(p)) {
+			if (step_mode && p->next && p->next->type == N_BLOCK)
+				psk->linebyline(p->next->next, false, true);
+			else
+				psk->process_statement(p->next);
+		}
+		else if (pnode->alt) {
+			if (step_mode && pnode->alt->type == N_BLOCK)
+				psk->linebyline(pnode->alt->next, false, true);
+			else
+				psk->process_statement(pnode->alt);
+		}
 	}
 	return &psk->Sig;
 }
@@ -52,8 +132,33 @@ CVar* EngineRuntime::WHILE(AuxScope* psk, const AstNode* pnode)
 {
 	AstNode* p = pnode->child;
 	psk->fExit = psk->fBreak = false;
-	while (psk->checkcond(p) && !psk->fExit && !psk->fBreak)
-		psk->process_statement(pnode->alt);
+	const bool step_mode = (psk->u.debugstatus == step || psk->u.debugstatus == step_in);
+	if (step_mode)
+	{
+		// In debugger step mode, execute at most one loop iteration and route body execution
+		// through line-by-line stepping so the debugger can pause inside the loop.
+		if (psk->checkcond(p) && !psk->fExit && !psk->fBreak) {
+			if (pnode->alt && pnode->alt->type == N_BLOCK)
+				psk->linebyline(pnode->alt->next, false, true);
+			else
+				psk->process_statement(pnode->alt);
+
+			// If loop continues, keep stepping in debug mode at the while header
+			// instead of exiting debugger after the first iteration.
+			if (!psk->fExit && !psk->fBreak && psk->checkcond(p)) {
+				psk->u.paused_line = pnode->line;
+				psk->u.paused_file = resolve_pause_file_for_scope(psk);
+				psk->u.paused_node = pnode;
+				psk->u.debugstatus = paused;
+				throw psk;
+			}
+		}
+	}
+	else
+	{
+		while (psk->checkcond(p) && !psk->fExit && !psk->fBreak)
+			psk->process_statement(pnode->alt);
+	}
 	psk->fBreak = false;
 	return &psk->Sig;
 }
@@ -72,18 +177,31 @@ CVar* EngineRuntime::WHILE(AuxScope* psk, const AstNode* pnode)
 
 CVar* EngineRuntime::SWITCH(AuxScope* psk, const AstNode* pnode)
 {
+	const bool step_mode = (psk->u.debugstatus == step || psk->u.debugstatus == step_in);
 	if (pnode) {
 		AstNode* p = pnode->child;
 		CVar sw_var = psk->Compute(p);
 		uint16_t stype = sw_var.type();
 		if (stype == TYPEBIT_REAL+1 || stype == TYPEBIT_STRING + 1 || stype == TYPEBIT_STRING + 2 || stype == TYPEBIT_COMPLEX+1 || stype == TYPEBIT_TEMPO_ONE + 1) {
 			p = pnode->alt; // case statement
-			for (; p; p = p->next->alt) {
-				if (p->type == T_OTHERWISE) {
-					psk->process_statement(p->next);
-					break;
-				}
-				else {
+				for (; p; p = p->next->alt) {
+					if (p->type == T_OTHERWISE) {
+						if (step_mode && p->next && p->next->type == N_BLOCK) {
+							AstNode* first = p->next->next;
+							if (first) {
+								psk->u.paused_line = first->line;
+								psk->u.paused_file = resolve_pause_file_for_scope(psk);
+								psk->u.paused_node = first;
+								psk->u.debugstatus = paused;
+								throw psk;
+							}
+							psk->linebyline(p->next->next, false, true);
+						}
+						else
+							psk->process_statement(p->next);
+						break;
+					}
+					else {
 					CVar cs_var = psk->Compute(p);
 					uint16_t ctype = cs_var.type();
 					if (ctype != TYPEBIT_REAL + 1 && ctype != TYPEBIT_STRING + 1 && ctype != TYPEBIT_STRING + 2 && ctype != TYPEBIT_COMPLEX + 1 && ctype != TYPEBIT_TEMPO_ONE + 1) {
@@ -93,7 +211,19 @@ CVar* EngineRuntime::SWITCH(AuxScope* psk, const AstNode* pnode)
 					}
 					if (ctype == TYPEBIT_STRING + 1 || ctype == TYPEBIT_STRING + 2) {
 						if (sw_var.str() == cs_var.str()) {
-							psk->process_statement(p->next);
+							if (step_mode && p->next && p->next->type == N_BLOCK) {
+								AstNode* first = p->next->next;
+								if (first) {
+									psk->u.paused_line = first->line;
+									psk->u.paused_file = resolve_pause_file_for_scope(psk);
+									psk->u.paused_node = first;
+									psk->u.debugstatus = paused;
+									throw psk;
+								}
+								psk->linebyline(p->next->next, false, true);
+							}
+							else
+								psk->process_statement(p->next);
 							break;
 						}
 						else 
@@ -103,14 +233,26 @@ CVar* EngineRuntime::SWITCH(AuxScope* psk, const AstNode* pnode)
 						if (ctype != stype || sw_var.nSamples != cs_var.nSamples || sw_var.value() != cs_var.value())
 							continue;
 					}
-					if (ctype == TYPEBIT_COMPLEX && sw_var.cvalue() != cs_var.cvalue())
-						continue;
-					// if it is still here, execute the current case block
-						psk->process_statement(p->next);
-					break;
+						if (ctype == TYPEBIT_COMPLEX && sw_var.cvalue() != cs_var.cvalue())
+							continue;
+						// if it is still here, execute the current case block
+						if (step_mode && p->next && p->next->type == N_BLOCK) {
+							AstNode* first = p->next->next;
+							if (first) {
+								psk->u.paused_line = first->line;
+								psk->u.paused_file = resolve_pause_file_for_scope(psk);
+								psk->u.paused_node = first;
+								psk->u.debugstatus = paused;
+								throw psk;
+							}
+							psk->linebyline(p->next->next, false, true);
+						}
+						else
+							psk->process_statement(p->next);
+						break;
+					}
 				}
 			}
-		}
 		else {
 			ostringstream oss;
 			oss << "TYPE=" << stype << " not allowed for switch statement";

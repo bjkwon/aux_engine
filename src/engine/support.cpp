@@ -18,6 +18,9 @@ static int countVectorItems(const AstNode* pnode)
 // get_output_count: needed to handle a statment with a function with multiple output vars
 int get_output_count(const AstNode* proot, const AstNode* pnode)
 {
+	if (!proot || !pnode)
+		return 1; // safe default for scalar-return built-ins
+
 	//we need tree pointer to the one calling the current statement
 	// To do...check the logic flow----12/29/2020
 	// pCurLine should be one of the following:
@@ -42,6 +45,8 @@ int get_output_count(const AstNode* proot, const AstNode* pnode)
 	*/
 
 	auto pCurLine = AuxScope::goto_line(proot, pnode->line);
+	if (!pCurLine)
+		pCurLine = (AstNode*)proot;
 	int nOutVars = 0;
 	// if pCurLine is looping such as T_IF, T_FOR, or T_WHILE
 	if (AuxScope::IsLooping(pCurLine))
@@ -54,12 +59,21 @@ int get_output_count(const AstNode* proot, const AstNode* pnode)
 	{
 		//if there's no lhs, lhs is same as arg0
 		auto arg0 = AuxScope::find_parent(pCurLine, pnode);
+		if (!arg0)
+			arg0 = AuxScope::find_parent(proot, pnode);
 		if (pCurLine != arg0) {
 			auto lhs = AuxScope::find_parent(pCurLine, arg0);
-			if (lhs->type == N_ARGS)
-				nOutVars = 0;
-			else if (lhs->type == N_VECTOR)
-				nOutVars = countVectorItems(lhs);
+			if (!lhs)
+				lhs = AuxScope::find_parent(proot, arg0);
+			if (lhs)
+			{
+				if (lhs->type == N_ARGS)
+					nOutVars = 0;
+				else if (lhs->type == N_VECTOR)
+					nOutVars = countVectorItems(lhs);
+				else
+					nOutVars = 1;
+			}
 			else
 				nOutVars = 1;
 		}
@@ -68,6 +82,8 @@ int get_output_count(const AstNode* proot, const AstNode* pnode)
 	{
 		// If no LHS, lhs is NULL
 		auto lhs = AuxScope::find_parent(pCurLine, pnode);
+		if (!lhs)
+			lhs = AuxScope::find_parent(proot, pnode);
 		if (lhs)
 		{
 			if (lhs->type == N_ARGS)
