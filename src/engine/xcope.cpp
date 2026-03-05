@@ -2,14 +2,13 @@
 #include <algorithm>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
+#include "AuxeVersion.h"
 #include "typecheck.h"
 #include "utils.h"
 #include <assert.h>
 #include <thread>
 
 using namespace std;
-
-#define AUXCORE_VERSION "2.0"
 
 #define TIME_UNIT_S 1
 #define TIME_UNIT_M 2

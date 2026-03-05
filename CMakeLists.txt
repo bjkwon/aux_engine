@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(auxe VERSION 0.1.0 LANGUAGES C CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" AUXE_VERSION_RAW)
+string(STRIP "${AUXE_VERSION_RAW}" AUXE_VERSION)
+if(AUXE_VERSION STREQUAL "")
+  set(AUXE_VERSION "0.0.0")
+endif()
+
+project(auxe VERSION ${AUXE_VERSION} LANGUAGES C CXX)
 
 # -----------------------------
 # Options
@@ -60,6 +66,12 @@ add_library(auxe ${AUXE_LIB_TYPE}
   ${AUXE_PARSE_C}
 )
 
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/engine/AuxeVersion.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/AuxeVersion.h"
+  @ONLY
+)
+
 # -----------------------------
 # Includes
 # -----------------------------
@@ -68,6 +80,7 @@ target_include_directories(auxe
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
     ${CMAKE_CURRENT_SOURCE_DIR}/src/api

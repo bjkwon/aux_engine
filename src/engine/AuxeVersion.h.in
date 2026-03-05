@@ -1,0 +1,3 @@
+#pragma once
+
+#define AUXCORE_VERSION "@AUXE_VERSION@"
