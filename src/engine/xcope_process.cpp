@@ -1,8 +1,152 @@
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
+#include "utils.h"
 #include <assert.h>
 #include <deque>
 #include <iostream>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+
+static const int AST_FLAG_ASYNC_ASSIGN = (1 << 20);
+
+namespace {
+struct AsyncAssignJob {
+	uint64_t id = 0;
+	EngineRuntime* env = nullptr;
+	AuxScope* owner = nullptr;
+	std::string lhs;
+	std::string rhs_expr;
+	std::map<std::string, CVar> vars_snapshot;
+	std::atomic<bool> done{ false };
+	bool ok = false;
+	CVar value;
+	std::string error;
+};
+
+std::mutex g_async_jobs_mtx;
+std::vector<std::shared_ptr<AsyncAssignJob>> g_async_jobs;
+std::atomic<uint64_t> g_async_job_id{ 1 };
+}
+
+static bool get_line_text(const std::string& script, int line, std::string& out)
+{
+	if (line <= 0) return false;
+	std::stringstream ss(script);
+	for (int k = 1; std::getline(ss, out); ++k)
+		if (k == line) return true;
+	return false;
+}
+
+static bool extract_async_rhs_from_script(const AuxScope& ths, const AstNode* pnode, std::string& rhs)
+{
+	std::string line;
+	if (!get_line_text(ths.script, pnode->line, line))
+		return false;
+	auto pos = line.find("<-");
+	if (pos == std::string::npos)
+		return false;
+	rhs = line.substr(pos + 2);
+	trim(rhs, std::string(" \t\r;"));
+	return !rhs.empty();
+}
+
+static void start_async_assign_job(AuxScope& ths, const std::string& lhs, const std::string& rhs_expr, uint64_t id)
+{
+	auto job = std::make_shared<AsyncAssignJob>();
+	job->id = id;
+	job->env = ths.pEnv;
+	job->owner = &ths;
+	job->lhs = lhs;
+	job->rhs_expr = rhs_expr;
+	job->vars_snapshot = ths.Vars;
+	{
+		std::lock_guard<std::mutex> lk(g_async_jobs_mtx);
+		g_async_jobs.push_back(job);
+	}
+	std::thread([job, env = ths.pEnv]() {
+		try {
+			AuxScope worker(env);
+			worker.Vars = job->vars_snapshot;
+			const std::string expr = "__async_tmp__=" + job->rhs_expr;
+			AstNode* n = worker.makenodes(expr);
+			if (!n)
+				throw std::runtime_error("Invalid async RHS expression.");
+			worker.node = n;
+			worker.Compute();
+			auto it = worker.Vars.find("__async_tmp__");
+			if (it == worker.Vars.end())
+				throw std::runtime_error("Async RHS did not produce a value.");
+			job->value = it->second;
+			job->ok = true;
+		}
+		catch (const AuxScope_exception& e) {
+			job->error = e.outstr;
+			job->ok = false;
+		}
+		catch (const std::exception& e) {
+			job->error = e.what();
+			job->ok = false;
+		}
+		catch (const char* e) {
+			job->error = e ? e : "Async job failed.";
+			job->ok = false;
+		}
+		catch (...) {
+			job->error = "Async job failed.";
+			job->ok = false;
+		}
+		job->done.store(true);
+	}).detach();
+}
+
+static int drain_async_assign_jobs(AuxScope& ths)
+{
+	int changed = 0;
+	std::lock_guard<std::mutex> lk(g_async_jobs_mtx);
+	for (auto it = g_async_jobs.begin(); it != g_async_jobs.end(); )
+	{
+		auto& job = *it;
+		if (job->env != ths.pEnv || !job->done.load())
+		{
+			++it;
+			continue;
+		}
+		if (job->ok)
+		{
+			if (job->owner && job->owner->pEnv == ths.pEnv)
+				job->owner->SetVar(job->lhs.c_str(), &job->value);
+			else
+				ths.SetVar(job->lhs.c_str(), &job->value);
+			++changed;
+		}
+		else
+		{
+			CVar carrier, status, msg, jid;
+			status.SetString("error");
+			msg.SetString(job->error.c_str());
+			jid.SetValue((auxtype)job->id);
+			carrier.strut["status"] = status;
+			carrier.strut["message"] = msg;
+			carrier.strut["job_id"] = jid;
+			if (job->owner && job->owner->pEnv == ths.pEnv)
+				job->owner->SetVar(job->lhs.c_str(), &carrier);
+			else
+				ths.SetVar(job->lhs.c_str(), &carrier);
+			++changed;
+		}
+		it = g_async_jobs.erase(it);
+	}
+	return changed;
+}
+
+int AuxScope::drain_async_jobs()
+{
+	return drain_async_assign_jobs(*this);
+}
 
 bool AuxScope::get_nodes_left_right_sides(const AstNode* pnode, const AstNode** plhs, const AstNode** prhs)
 {
@@ -517,9 +661,33 @@ void AuxScope::sanitize_cell_node(const AstNode* p)
 
 CVar* AuxScope::process_statement(const AstNode* pnode)
 {
+	drain_async_assign_jobs(*this);
 	const AstNode* plhs;
 	const AstNode* prhs;
 	bool isreplica = get_nodes_left_right_sides(pnode, &plhs, &prhs);
+	const bool is_async_assign = (pnode && (pnode->suppress & AST_FLAG_ASYNC_ASSIGN));
+	if (is_async_assign)
+	{
+		if (!plhs || plhs->type != T_ID || plhs->alt)
+			throw exception_etc(*this, pnode, "Async assignment currently supports only plain variables (x <- expr).").raise();
+		if (level != 1 || dad != nullptr)
+			throw exception_etc(*this, pnode, "Async assignment is allowed only at top-level scope.").raise();
+		std::string rhs_expr;
+		if (!extract_async_rhs_from_script(*this, pnode, rhs_expr))
+			throw exception_etc(*this, pnode, "Cannot parse async RHS from source line.").raise();
+		const uint64_t job_id = g_async_job_id.fetch_add(1);
+		CVar carrier, status, jid;
+		status.SetString("requested");
+		jid.SetValue((auxtype)job_id);
+		carrier.strut["status"] = status;
+		carrier.strut["job_id"] = jid;
+		SetVar(plhs->str, &carrier);
+		Sig = carrier;
+		start_async_assign_job(*this, plhs->str, rhs_expr, job_id);
+		u.pending_assign_lhs = nullptr;
+		u.pending_assign_rhs_call = nullptr;
+		return &Sig;
+	}
 	u.pending_assign_lhs = nullptr;
 	u.pending_assign_rhs_call = nullptr;
 	// If RHS evaluation is interrupted by debugger pause, complete assignment on resume.

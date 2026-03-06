@@ -1,0 +1,18 @@
+class user
+member id=0
+member name=""
+method init(i,n)
+id=i
+name=n
+end
+method out=myfunc(arg)
+out=name++sprintf("%d",id)
+end
+end
+
+
+
+example usage:
+
+u=user(100,"bjkwon")
+u.myfunc(0)

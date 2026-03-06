@@ -1082,6 +1082,15 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
     }
 }
 
+int aux_poll_async(auxContext* ctx)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return 0;
+    }
+    return frame->drain_async_jobs();
+}
+
 int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out)
 {
     if (!ctx) return -1;

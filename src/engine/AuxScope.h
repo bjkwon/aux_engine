@@ -76,6 +76,19 @@ public:
 	virtual ~UDF() {};
 };
 
+class AuxClassDef
+{
+public:
+	string name;
+	string fullname;
+	string content;
+	map<string, CVar> defaults;
+	map<string, string> methods; // method name (lower) -> udf key
+	bool loaded;
+	AuxClassDef() : loaded(false) {}
+	virtual ~AuxClassDef() {};
+};
+
 typedef bool (*pfunc_typecheck)(uint16_t tp);
 
 class Cfunction
@@ -151,6 +164,7 @@ public:
 	static map<string, Cfunction> pseudo_vars;
 	DebugHook debug_hook;
 	map<string, UDF> udf;
+	map<string, AuxClassDef> classes;
 	unordered_map<uint64_t, FileEntry> fileTable;
 	uint64_t nextFD = 1;
 	int Fs;
@@ -328,6 +342,7 @@ public:
 	unsigned long Tick0, Tick1;
 	vector<float> ends;
 	CVar* process_statement(const AstNode* pnode);
+	int drain_async_jobs();
 
 	bool fBreak;
 	bool fExit;

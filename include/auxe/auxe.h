@@ -127,6 +127,7 @@ AUXE_API auxDebugAction aux_handle_debug_key(auxContext* ctx, const string& inst
 
 AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname);
 AUXE_API auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act);
+AUXE_API int aux_poll_async(auxContext* ctx); // returns number of completed async assignments committed
 
 // Optional: query where we are paused
 AUXE_API int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out);

@@ -1,5 +1,8 @@
 #include <iostream>
 #include <algorithm>
+#include <set>
+#include <cctype>
+#include <cstring>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
 #include "AuxeVersion.h"
@@ -30,12 +33,340 @@ static int count_time_unit_bits(int mask)
 	return out;
 }
 
+static const int UDF_DECL_REGULAR = 2;
+static const int UDF_DECL_STATIC = 3;
+static const int UDF_DECL_MEMBER = 4;
+static const int AST_FLAG_ASYNC_ASSIGN = (1 << 20);
+
 static double unit_mask_to_ms_scale(int mask)
 {
 	if (mask == TIME_UNIT_S) return 1000.;
 	if (mask == TIME_UNIT_M) return 60000.;
 	if (mask == TIME_UNIT_H) return 3600000.;
 	return 1.;
+}
+
+static bool is_ident_char(char ch)
+{
+	unsigned char u = (unsigned char)ch;
+	return std::isalnum(u) || ch == '_' || ch == '?';
+}
+
+static size_t skip_spaces(const std::string& s, size_t i, size_t end)
+{
+	while (i < end && (s[i] == ' ' || s[i] == '\t')) ++i;
+	return i;
+}
+
+static bool starts_with_keyword(const std::string& s, size_t i, size_t end, const char* kw)
+{
+	const size_t n = strlen(kw);
+	if (i + n > end) return false;
+	if (i > 0 && is_ident_char(s[i - 1])) return false;
+	for (size_t k = 0; k < n; ++k)
+	{
+		if (std::tolower((unsigned char)s[i + k]) != kw[k]) return false;
+	}
+	if (i + n < s.size() && is_ident_char(s[i + n])) return false;
+	return true;
+}
+
+static std::string lower_copy(const std::string& in)
+{
+	std::string out = in;
+	std::transform(out.begin(), out.end(), out.begin(), ::tolower);
+	return out;
+}
+
+static bool is_blank_or_comment_line(const std::string& line)
+{
+	auto t = line;
+	trim(t, string(" \t\r"));
+	return t.empty() || t.rfind("//", 0) == 0;
+}
+
+static bool parse_member_declaration(const std::string& trimmed, std::string& name, std::string& expr)
+{
+	if (!starts_with_keyword(trimmed, 0, trimmed.size(), "member"))
+		return false;
+	size_t i = skip_spaces(trimmed, 6, trimmed.size());
+	size_t eq = trimmed.find('=', i);
+	if (eq == std::string::npos)
+		return false;
+	name = trimmed.substr(i, eq - i);
+	expr = trimmed.substr(eq + 1);
+	trim(name, string(" \t\r"));
+	trim(expr, string(" \t\r"));
+	return !name.empty();
+}
+
+static bool is_block_begin_line(const std::string& trimmed)
+{
+	const char* kws[] = { "if", "while", "for", "switch", "try", "function", "member", "class" };
+	for (auto kw : kws)
+	{
+		if (starts_with_keyword(trimmed, 0, trimmed.size(), kw))
+			return true;
+	}
+	return false;
+}
+
+static bool is_end_line(const std::string& trimmed)
+{
+	return starts_with_keyword(trimmed, 0, trimmed.size(), "end");
+}
+
+static bool extract_method_name_from_header(const std::string& header_rest, std::string& out_method_lower)
+{
+	// Supports: "out=foo(a,b)" or "foo(a,b)" (vector LHS also works via the last '=' rule).
+	size_t p = header_rest.find('(');
+	std::string prefix = (p == std::string::npos) ? header_rest : header_rest.substr(0, p);
+	trim(prefix, string(" \t\r"));
+	if (prefix.empty()) return false;
+	size_t eq = prefix.rfind('=');
+	std::string name = (eq == std::string::npos) ? prefix : prefix.substr(eq + 1);
+	trim(name, string(" \t\r"));
+	if (name.empty()) return false;
+	out_method_lower = lower_copy(name);
+	return true;
+}
+
+static bool get_object_class_key(const CVar* pBase, std::string& class_key)
+{
+	if (!pBase) return false;
+	auto it = pBase->strut.find("__class");
+	if (it == pBase->strut.end()) return false;
+	if (!ISSTRINGG(it->second.type())) return false;
+	class_key = lower_copy(it->second.str());
+	return !class_key.empty();
+}
+
+static std::string preprocess_member_function_syntax(const std::string& src, std::set<int>& member_function_lines)
+{
+	std::string out = src;
+	size_t pos = 0;
+	int line = 1;
+	while (pos < out.size())
+	{
+		size_t line_end = out.find('\n', pos);
+		if (line_end == std::string::npos) line_end = out.size();
+		size_t scan_end = line_end;
+		size_t comment = out.find("//", pos);
+		if (comment != std::string::npos && comment < line_end)
+			scan_end = comment;
+
+		for (size_t i = pos; i < scan_end; ++i)
+		{
+			if (!starts_with_keyword(out, i, scan_end, "member")) continue;
+			size_t j = skip_spaces(out, i + 6, scan_end);
+			if (!starts_with_keyword(out, j, scan_end, "function")) continue;
+			for (size_t k = i; k < i + 6; ++k) out[k] = ' ';
+			member_function_lines.insert(line);
+			i = j + 7;
+		}
+
+		if (line_end < out.size())
+		{
+			++line;
+			pos = line_end + 1;
+		}
+		else
+			break;
+	}
+	return out;
+}
+
+static std::string preprocess_async_assign_syntax(const std::string& src, std::map<int, int>& async_assign_counts)
+{
+	std::string out = src;
+	size_t pos = 0;
+	int line = 1;
+	while (pos < out.size())
+	{
+		size_t line_end = out.find('\n', pos);
+		if (line_end == std::string::npos) line_end = out.size();
+		bool in_str = false;
+		for (size_t i = pos; i + 1 < line_end; ++i)
+		{
+			if (out[i] == '"')
+				in_str = !in_str;
+			if (in_str) continue;
+			if (out[i] == '/' && out[i + 1] == '/')
+				break;
+			if (out[i] == '<' && out[i + 1] == '-')
+			{
+				out[i] = '=';
+				out[i + 1] = ' ';
+				async_assign_counts[line] += 1;
+				++i;
+			}
+		}
+		if (line_end < out.size())
+		{
+			++line;
+			pos = line_end + 1;
+		}
+		else
+			break;
+	}
+	return out;
+}
+
+static bool is_assignment_statement_node(const AstNode* p)
+{
+	if (!p || !p->child) return false;
+	switch (p->type)
+	{
+	case N_BLOCK:
+	case T_FOR:
+	case T_IF:
+	case T_WHILE:
+	case T_SWITCH:
+	case T_TRY:
+	case T_CATCH:
+	case T_CATCHBACK:
+	case T_RETURN:
+	case T_BREAK:
+	case T_CONTINUE:
+	case '+': case '-': case '*': case '/': case '^': case '@': case '%':
+	case '<': case '>':
+	case T_POSITIVE: case T_NEGATIVE: case T_TRANSPOSE: case T_MATRIXMULT:
+	case T_OP_SHIFT: case T_OP_CONCAT:
+	case T_LOGIC_EQ: case T_LOGIC_NE: case T_LOGIC_LE: case T_LOGIC_GE:
+	case T_LOGIC_NOT: case T_LOGIC_AND: case T_LOGIC_OR:
+		return false;
+	default:
+		return true;
+	}
+}
+
+static void mark_async_assign_nodes(AstNode* p, std::map<int, int>& async_assign_counts)
+{
+	for (; p; p = p->next)
+	{
+		auto it = async_assign_counts.find(p->line);
+		if (it != async_assign_counts.end() && it->second > 0 && is_assignment_statement_node(p))
+		{
+			p->suppress |= AST_FLAG_ASYNC_ASSIGN;
+			--(it->second);
+		}
+		if (p->child) mark_async_assign_nodes(p->child, async_assign_counts);
+		if (p->alt) mark_async_assign_nodes(p->alt, async_assign_counts);
+	}
+}
+
+static void mark_member_function_nodes(AstNode* p, const std::set<int>& member_function_lines)
+{
+	for (; p; p = p->next)
+	{
+		if (p->type == T_FUNCTION && member_function_lines.find(p->line) != member_function_lines.end())
+			p->suppress = UDF_DECL_MEMBER;
+		if (p->child) mark_member_function_nodes(p->child, member_function_lines);
+		if (p->alt) mark_member_function_nodes(p->alt, member_function_lines);
+	}
+}
+
+static bool parse_class_source(
+	const std::string& src,
+	std::string& class_name_lower,
+	std::vector<std::pair<std::string, std::string>>& members,
+	std::vector<std::pair<std::string, std::string>>& methods,
+	std::string& emsg)
+{
+	std::vector<std::string> lines;
+	{
+		std::stringstream ss(src);
+		std::string line;
+		while (std::getline(ss, line))
+			lines.push_back(line);
+	}
+	if (lines.empty()) {
+		emsg = "Class file is empty.";
+		return false;
+	}
+	int class_header = -1;
+	int class_end = -1;
+	for (int i = 0; i < (int)lines.size(); ++i)
+	{
+		if (!is_blank_or_comment_line(lines[i])) { class_header = i; break; }
+	}
+	for (int i = (int)lines.size() - 1; i >= 0; --i)
+	{
+		if (!is_blank_or_comment_line(lines[i])) { class_end = i; break; }
+	}
+	if (class_header < 0 || class_end < class_header) {
+		emsg = "Class file has no class definition.";
+		return false;
+	}
+	{
+		auto t = lines[class_header];
+		trim(t, string(" \t\r"));
+		if (!starts_with_keyword(t, 0, t.size(), "class")) {
+			emsg = "Class file must start with \"class <Name>\".";
+			return false;
+		}
+		auto i = skip_spaces(t, 5, t.size());
+		auto name = t.substr(i);
+		trim(name, string(" \t\r"));
+		if (name.empty()) {
+			emsg = "Class name missing after \"class\".";
+			return false;
+		}
+		class_name_lower = lower_copy(name);
+	}
+	{
+		auto t = lines[class_end];
+		trim(t, string(" \t\r"));
+		if (!is_end_line(t)) {
+			emsg = "Class definition must end with \"end\".";
+			return false;
+		}
+	}
+	for (int i = class_header + 1; i < class_end; ++i)
+	{
+		auto t = lines[i];
+		trim(t, string(" \t\r"));
+		if (t.empty() || t.rfind("//", 0) == 0) continue;
+		std::string mname, mexpr;
+		if (parse_member_declaration(t, mname, mexpr))
+		{
+			members.push_back({ mname, mexpr });
+			continue;
+		}
+		if (starts_with_keyword(t, 0, t.size(), "method"))
+		{
+			std::string header_rest = t.substr(skip_spaces(t, 6, t.size()));
+			std::string method_name_lower;
+			if (!extract_method_name_from_header(header_rest, method_name_lower)) {
+				emsg = "Cannot parse method header: " + t;
+				return false;
+			}
+			std::ostringstream method_src;
+			method_src << "member function " << header_rest << "\n";
+			int depth = 1;
+			for (++i; i < class_end; ++i)
+			{
+				auto u = lines[i];
+				trim(u, string(" \t\r"));
+				if (is_blank_or_comment_line(u)) continue;
+				if (is_block_begin_line(u)) ++depth;
+				if (is_end_line(u)) {
+					--depth;
+					if (depth == 0) break; // class-style method terminator; do not copy
+				}
+				method_src << lines[i] << "\n";
+			}
+			if (depth != 0) {
+				emsg = "Method \"" + method_name_lower + "\" has unmatched end.";
+				return false;
+			}
+			methods.push_back({ method_name_lower, method_src.str() });
+			continue;
+		}
+		emsg = "Unknown top-level class item: " + t;
+		return false;
+	}
+	return true;
 }
 
 //Application-wide global variables
@@ -260,17 +591,25 @@ AstNode* AuxScope::makenodes(const string& instr)
 	int res;
 	char* errmsg;
 	if (instr.empty()) return node;
+	std::map<int, int> async_assign_counts;
+	std::string parser_input = preprocess_async_assign_syntax(instr, async_assign_counts);
+	std::set<int> member_function_lines;
+	parser_input = preprocess_member_function_syntax(parser_input, member_function_lines);
 	if (nodeAllocated) {
 		yydeleteAstNode(node, 0);
 		nodeAllocated = false;
 	}
 	AstNode* out = NULL;
 	reset_stack_ptr();
-	if ((res = yysetNewStringToScan(instr.c_str(), NULL /*str_autocorrect*/)))
+	if ((res = yysetNewStringToScan(parser_input.c_str(), NULL /*str_autocorrect*/)))
 	{
 		throw "[INTERNAL ERROR] yysetNewStringToScan() failed!";
 	}
 	res = yyparse(&out, &errmsg);
+	if (out && !member_function_lines.empty())
+		mark_member_function_nodes(out, member_function_lines);
+	if (out && !async_assign_counts.empty())
+		mark_async_assign_nodes(out, async_assign_counts);
 	nodeAllocated = out ? true : false;
 	if (!errmsg && res == 2)
 	{
@@ -530,6 +869,148 @@ const AstNode* AuxScope::searchtree(const AstNode* p, int type, int line2check)
 	}
 	return NULL;
 }
+
+static bool ensure_class_loaded(AuxScope& ths, const std::string& class_name_lower, std::string& emsg)
+{
+	auto found = ths.pEnv->classes.find(class_name_lower);
+	if (found != ths.pEnv->classes.end() && found->second.loaded)
+		return true;
+
+	std::string fullpath;
+	FILE* clsfile = ths.fopen_from_path(class_name_lower, "aux", fullpath);
+	if (!clsfile)
+		return false;
+
+	std::string filecontent;
+	if (GetFileText(clsfile, filecontent) <= 0)
+	{
+		fclose(clsfile);
+		emsg = "Cannot read class file: " + class_name_lower;
+		return false;
+	}
+	fclose(clsfile);
+	std::transform(fullpath.begin(), fullpath.end(), fullpath.begin(), ::tolower);
+	{
+		std::stringstream ss(filecontent);
+		std::string first;
+		while (std::getline(ss, first))
+		{
+			if (is_blank_or_comment_line(first))
+				continue;
+			trim(first, string(" \t\r"));
+			if (!starts_with_keyword(first, 0, first.size(), "class"))
+				return false; // this is a regular UDF file, not a class file
+			break;
+		}
+	}
+
+	std::string parsed_name;
+	std::vector<std::pair<std::string, std::string>> members;
+	std::vector<std::pair<std::string, std::string>> methods;
+	if (!parse_class_source(filecontent, parsed_name, members, methods, emsg))
+		return false;
+	if (parsed_name != class_name_lower)
+	{
+		emsg = "Class name mismatch: expected \"" + class_name_lower + "\", found \"" + parsed_name + "\".";
+		return false;
+	}
+
+	AuxClassDef cls;
+	cls.name = parsed_name;
+	cls.fullname = fullpath;
+	cls.content = filecontent;
+
+	for (const auto& m : members)
+	{
+		CVar defval;
+		if (!m.second.empty())
+		{
+			AuxScope evalscope(ths.pEnv);
+			std::string evalscript = "__class_member_tmp__=" + m.second;
+			AstNode* evalnode = evalscope.makenodes(evalscript);
+			if (!evalnode)
+			{
+				emsg = "Invalid default for member \"" + m.first + "\" in class \"" + class_name_lower + "\".";
+				return false;
+			}
+			evalscope.node = evalnode;
+			evalscope.Compute();
+			auto it = evalscope.Vars.find("__class_member_tmp__");
+			if (it == evalscope.Vars.end())
+			{
+				emsg = "Failed evaluating default for member \"" + m.first + "\" in class \"" + class_name_lower + "\".";
+				return false;
+			}
+			defval = it->second;
+		}
+		cls.defaults[m.first] = defval;
+	}
+
+	for (const auto& m : methods)
+	{
+		AuxScope methodscope(ths.pEnv);
+		AstNode* methodtree = methodscope.makenodes(m.second);
+		if (!methodtree)
+		{
+			emsg = "Invalid method \"" + m.first + "\" in class \"" + class_name_lower + "\".";
+			return false;
+		}
+		AstNode* fn = (methodtree->type == N_BLOCK) ? methodtree->next : methodtree;
+		if (!fn || fn->type != T_FUNCTION)
+		{
+			emsg = "Method \"" + m.first + "\" did not parse to a function node.";
+			return false;
+		}
+		std::string udf_key = "__class__" + class_name_lower + "__" + m.first;
+		if (fn->str) free(fn->str);
+		fn->str = (char*)calloc(udf_key.size() + 1, 1);
+		strcpy(fn->str, udf_key.c_str());
+		UDF ud;
+		ud.uxtree = fn;
+		ud.fullname = fullpath;
+		ud.content = m.second;
+		ths.pEnv->udf[udf_key] = ud;
+		cls.methods[m.first] = udf_key;
+	}
+
+	cls.loaded = true;
+	ths.pEnv->classes[class_name_lower] = cls;
+	return true;
+}
+
+static bool try_instantiate_class_call(AuxScope& ths, const AstNode* pCalling, CVar& out, std::string& emsg)
+{
+	if (!pCalling || pCalling->type != T_ID || !pCalling->str)
+		return false;
+	if (!(pCalling->alt && pCalling->alt->type == N_ARGS))
+		return false;
+	std::string class_key = lower_copy(pCalling->str);
+	if (!ensure_class_loaded(ths, class_key, emsg))
+		return false;
+
+	auto it = ths.pEnv->classes.find(class_key);
+	if (it == ths.pEnv->classes.end() || !it->second.loaded)
+		return false;
+
+	out.Reset();
+	out.strut.clear();
+	out.struts.clear();
+	for (const auto& kv : it->second.defaults)
+		out.strut[kv.first] = kv.second;
+	CVar class_name_holder;
+	class_name_holder.SetString(class_key.c_str());
+	out.strut["__class"] = class_name_holder;
+
+	if (it->second.methods.find("init") != it->second.methods.end())
+	{
+		AstNode fake = *pCalling;
+		fake.type = N_STRUCT;
+		fake.str = (char*)"init";
+		ths.PrepareAndCallUDF(&fake, &out);
+	}
+	return true;
+}
+
 AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 {
 	if (ptree->type == T_OP_CONCAT || ptree->type == '+' || ptree->type == '-' || ptree->type == T_TRANSPOSE || ptree->type == T_MATRIXMULT
@@ -589,14 +1070,29 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 		//Need to scan the whole statement whether this is a pgo statement requiring an update of GO
 		if (!(pres = GetVariable(ptree->str, ptree, *psigBase)))
 		{
+			CVar ctor_obj;
+			string class_err;
+			if (try_instantiate_class_call(*this, ptree, ctor_obj, class_err))
+			{
+				Sig = ctor_obj;
+				*psigBase = &Sig;
+				if (ptree->alt && (ptree->alt->type == N_ARGS || IsConditional(ptree->alt)))
+					ptree = ptree->alt;
+				return get_next_parsible_node(ptree);
+			}
+			if (!class_err.empty())
+				throw exception_etc(*this, ptree, class_err.c_str()).raise();
 			AstNode* t_func;
 			if ((t_func = ReadUDF(emsg, string(ptree->str))))
 			{
 				if (ptree->child)	throw_LHS_lvalue(ptree, true);
 				// if static function, psigBase must be NULL
-				if (t_func->suppress == 3 && *psigBase)
+				if (t_func->suppress == UDF_DECL_STATIC && *psigBase)
 					throw exception_misuse(*this, t_func, string(ptree->str) + "() : function declared as static cannot be called as a member function.").raise();
-				PrepareAndCallUDF(ptree, &Sig);
+				if (t_func->suppress == UDF_DECL_MEMBER && !*psigBase)
+					throw exception_misuse(*this, t_func, string(ptree->str) + "() : member function must be called as a member function.").raise();
+				CVar* udfBase = (ptree->type == N_STRUCT) ? *psigBase : nullptr;
+				PrepareAndCallUDF(ptree, udfBase);
 				// if a function call follows N_ARGS, skip it for next_parsible_node
 				*psigBase = &Sig;
 				if (ptree->alt && (ptree->alt->type == N_ARGS || IsConditional(ptree->alt)))
@@ -815,7 +1311,7 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	// Check if the same udf is called during debugging... in that case Script shoudl be checked and handled...
 
 	// Checking the number of input args used in the call
-	size_t nargs = callingType==N_STRUCT ? 1 : 0;
+	size_t nargs = 0;
 	if (pCalling->alt)
 		for (auto pp = pCalling->alt->child; pp; pp = pp->next)
 			nargs++;
@@ -835,6 +1331,29 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	if (GOvars.find("gcf") != GOvars.end())	son->GOvars["gcf"] = GOvars["gcf"];
 	// Keep lookup precedence aligned with ReadUDF(): local function first, then global UDF.
 	bool resolved = false;
+	if (callingType == N_STRUCT && pBase)
+	{
+		std::string class_key;
+		if (get_object_class_key(pBase, class_key))
+		{
+			auto cfd = pEnv->classes.find(class_key);
+			if (cfd != pEnv->classes.end())
+			{
+				auto mfd = cfd->second.methods.find(lookupName);
+				if (mfd != cfd->second.methods.end())
+				{
+					auto udftree = pEnv->udf.find(mfd->second);
+					if (udftree != pEnv->udf.end() && udftree->second.uxtree)
+					{
+						son->u.t_func = udftree->second.uxtree;
+						son->u.t_func_base = son->u.t_func;
+						son->u.base = mfd->second;
+						resolved = true;
+					}
+				}
+			}
+		}
+	}
 	if (!baseLookup.empty()) {
 		auto udftreeBase = pEnv->udf.find(baseLookup);
 		if (udftreeBase != pEnv->udf.end()) {
@@ -892,6 +1411,11 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	}
 	if (!son->u.t_func || !son->u.t_func_base)
 		throw exception_etc(*this, pCalling, "UDF parse tree is null.").raise();
+	const bool class_method = son->u.t_func->suppress == UDF_DECL_MEMBER;
+	if (class_method && !(callingType == N_STRUCT && pBase))
+		throw exception_misuse(*this, pCalling, string(callingName) + "() : member function must be called as a member function.").raise();
+	if (!class_method && callingType == N_STRUCT)
+		nargs += 1; // non-class dot call injects the object as the first formal arg
 	son->node = son->u.t_func_base->child->next;
 	son->node = son->u.t_func->child->next;
 	//output argument string list
@@ -933,15 +1457,20 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	pa = pCalling->alt;
 	//If the line invoking the udf res = udf(arg1, arg2...), pa points to arg1 and so on
 	son->u.nargin = 0;
-	if (pa) {
-		if (pa->type == N_ARGS)
-			pa = pa->child;
-		if (callingType == N_STRUCT) // if it is a dot function call, make son->u.nargin 1
-			son->u.nargin = 1;
-	}
+	if (pa && pa->type == N_ARGS)
+		pa = pa->child;
+	if (!class_method && callingType == N_STRUCT)
+		son->u.nargin = 1; // non-class dot call injects object into first formal arg
 	//If the line invoking the udf res = var.udf(arg1, arg2...), binding of the first arg, var, is done separately via pBase. The rest, arg1, arg2, ..., are done below with pf->next
 	pf = son->u.t_func->child->child;
-	if (pBase && callingType==N_STRUCT) {
+	if (class_method && pBase)
+	{
+		// Expose current member values as local vars so class methods can read/write
+		// members without requiring an explicit receiver prefix.
+		for (auto& it : pBase->strut)
+			son->SetVar(it.first.c_str(), &it.second);
+	}
+	if (!class_method && pBase && callingType==N_STRUCT) {
 		if (!pf || !pf->str) {
 			ostringstream msg;
 			msg << "Object-style call requires at least one formal input parameter in UDF \"" << son->u.t_func->str << "\".";
@@ -973,6 +1502,16 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	// prevents breakpoints set on stepped-into child UDFs from ever triggering.
 	//son->SetVar("_________",pStaticVars); // how can I add static variables here???
 	son->CallUDF(pCalling, pBase, nargout);
+	if (class_method && pBase)
+	{
+		// Copy back values for existing members that were updated in class method scope.
+		for (auto& it : pBase->strut)
+		{
+			auto vt = son->Vars.find(it.first);
+			if (vt != son->Vars.end())
+				it.second = vt->second;
+		}
+	}
 	FinalizeChildUDFCall();
 	u.pending_assign_lhs = nullptr;
 	u.pending_assign_rhs_call = nullptr;
@@ -1135,8 +1674,8 @@ AstNode* AuxScope::ReadUDF(string& emsg, const string& udf_filename)
 		}
 	}
 	//pout->child should be ID_LIST
-	if (!pout->child->child) // function takes no input argument
-		pout->suppress = 3;
+	if (!pout->child->child && pout->suppress == UDF_DECL_REGULAR) // function takes no input argument
+		pout->suppress = UDF_DECL_STATIC;
 	return pout;
 }
 
