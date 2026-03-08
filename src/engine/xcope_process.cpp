@@ -11,7 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 
-static const int AST_FLAG_ASYNC_ASSIGN = (1 << 20);
+static const int AST_FLAG_ASYNC_ASSIGN = AST_SUPPRESS_ASYNC_ASSIGN;
 
 namespace {
 struct AsyncAssignJob {

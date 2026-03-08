@@ -598,8 +598,8 @@ vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname)
     const CVar* cv = &it->second;
     auto t = cv->type();
     if (ISCELL(t)) {
-        for (auto v : cv->cell)
-            out.push_back(reinterpret_cast<AuxObj>(cv));
+        for (const auto& v : cv->cell)
+            out.push_back(reinterpret_cast<AuxObj>(&v));
     }
     return out;
 }
@@ -616,8 +616,8 @@ map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname)
     auto t = cv->type();
 
     if (ISSTRUT(t)) {
-        for (auto v : cv->strut)
-            out[v.first] = reinterpret_cast<AuxObj>(cv);
+        for (const auto& v : cv->strut)
+            out[v.first] = reinterpret_cast<AuxObj>(&v.second);
     }
     return out;
 }

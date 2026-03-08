@@ -143,6 +143,7 @@ void clearTimeNodeMeta(AstNode *p);
 void resolveSingleTimeNode(AstNode *p);
 int resolveTimePair(AstNode *first, AstNode *second);
 int resolveTimeVector(AstNode *vectorNode);
+int consumeAsyncAssignMarker(int line, int col);
 %}
 
 /* Note to myself 6/7/2018--------------
@@ -1099,11 +1100,15 @@ assign: tid assign2this
 	{
 		$$ = $1;
 		$$->child = $2;
+		if (consumeAsyncAssignMarker(@2.first_line, @2.first_column))
+			$$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
 	}
 	| varblock assign2this
 	{
 		$$ = $1;
 		$$->child = $2;
+		if (consumeAsyncAssignMarker(@2.first_line, @2.first_column))
+			$$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
 	}
 	| varblock '=' assign
 	{ //c=a(2)=44

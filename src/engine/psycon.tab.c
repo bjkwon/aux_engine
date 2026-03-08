@@ -202,6 +202,7 @@ void print_token_value(FILE *file, int type, YYSTYPE value);
 char *getT_ID_str(AstNode *p);
 void handle_tilde(AstNode *proot, AstNode *pp, YYLTYPE loc);
 int consumeNumberUnitMask(int line, int col);
+int consumeAsyncAssignMarker(int line, int col);
 
 
 /* Line 264 of yacc.c  */
@@ -3960,6 +3961,8 @@ yyreduce:
     {
 		(yyval.pnode) = (yyvsp[(1) - (2)].pnode);
 		(yyval.pnode)->child = (yyvsp[(2) - (2)].pnode);
+		if (consumeAsyncAssignMarker((yylsp[(2) - (2)]).first_line, (yylsp[(2) - (2)]).first_column))
+			(yyval.pnode)->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
 	;}
     break;
 
@@ -3970,6 +3973,8 @@ yyreduce:
     {
 		(yyval.pnode) = (yyvsp[(1) - (2)].pnode);
 		(yyval.pnode)->child = (yyvsp[(2) - (2)].pnode);
+		if (consumeAsyncAssignMarker((yylsp[(2) - (2)]).first_line, (yylsp[(2) - (2)]).first_column))
+			(yyval.pnode)->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
 	;}
     break;
 

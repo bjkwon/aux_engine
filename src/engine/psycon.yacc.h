@@ -35,6 +35,8 @@ typedef struct AstNode_t {
 	struct AstNode_t* next;
 } AstNode;
 
+#define AST_SUPPRESS_ASYNC_ASSIGN (1 << 20)
+
 extern int yydebug;
 
 int yyPrintf(const char *msg, AstNode *p);

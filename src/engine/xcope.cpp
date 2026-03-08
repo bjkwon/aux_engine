@@ -36,7 +36,6 @@ static int count_time_unit_bits(int mask)
 static const int UDF_DECL_REGULAR = 2;
 static const int UDF_DECL_STATIC = 3;
 static const int UDF_DECL_MEMBER = 4;
-static const int AST_FLAG_ASYNC_ASSIGN = (1 << 20);
 
 static double unit_mask_to_ms_scale(int mask)
 {
@@ -174,85 +173,6 @@ static std::string preprocess_member_function_syntax(const std::string& src, std
 			break;
 	}
 	return out;
-}
-
-static std::string preprocess_async_assign_syntax(const std::string& src, std::map<int, int>& async_assign_counts)
-{
-	std::string out = src;
-	size_t pos = 0;
-	int line = 1;
-	while (pos < out.size())
-	{
-		size_t line_end = out.find('\n', pos);
-		if (line_end == std::string::npos) line_end = out.size();
-		bool in_str = false;
-		for (size_t i = pos; i + 1 < line_end; ++i)
-		{
-			if (out[i] == '"')
-				in_str = !in_str;
-			if (in_str) continue;
-			if (out[i] == '/' && out[i + 1] == '/')
-				break;
-			if (out[i] == '<' && out[i + 1] == '-')
-			{
-				out[i] = '=';
-				out[i + 1] = ' ';
-				async_assign_counts[line] += 1;
-				++i;
-			}
-		}
-		if (line_end < out.size())
-		{
-			++line;
-			pos = line_end + 1;
-		}
-		else
-			break;
-	}
-	return out;
-}
-
-static bool is_assignment_statement_node(const AstNode* p)
-{
-	if (!p || !p->child) return false;
-	switch (p->type)
-	{
-	case N_BLOCK:
-	case T_FOR:
-	case T_IF:
-	case T_WHILE:
-	case T_SWITCH:
-	case T_TRY:
-	case T_CATCH:
-	case T_CATCHBACK:
-	case T_RETURN:
-	case T_BREAK:
-	case T_CONTINUE:
-	case '+': case '-': case '*': case '/': case '^': case '@': case '%':
-	case '<': case '>':
-	case T_POSITIVE: case T_NEGATIVE: case T_TRANSPOSE: case T_MATRIXMULT:
-	case T_OP_SHIFT: case T_OP_CONCAT:
-	case T_LOGIC_EQ: case T_LOGIC_NE: case T_LOGIC_LE: case T_LOGIC_GE:
-	case T_LOGIC_NOT: case T_LOGIC_AND: case T_LOGIC_OR:
-		return false;
-	default:
-		return true;
-	}
-}
-
-static void mark_async_assign_nodes(AstNode* p, std::map<int, int>& async_assign_counts)
-{
-	for (; p; p = p->next)
-	{
-		auto it = async_assign_counts.find(p->line);
-		if (it != async_assign_counts.end() && it->second > 0 && is_assignment_statement_node(p))
-		{
-			p->suppress |= AST_FLAG_ASYNC_ASSIGN;
-			--(it->second);
-		}
-		if (p->child) mark_async_assign_nodes(p->child, async_assign_counts);
-		if (p->alt) mark_async_assign_nodes(p->alt, async_assign_counts);
-	}
 }
 
 static void mark_member_function_nodes(AstNode* p, const std::set<int>& member_function_lines)
@@ -591,10 +511,8 @@ AstNode* AuxScope::makenodes(const string& instr)
 	int res;
 	char* errmsg;
 	if (instr.empty()) return node;
-	std::map<int, int> async_assign_counts;
-	std::string parser_input = preprocess_async_assign_syntax(instr, async_assign_counts);
 	std::set<int> member_function_lines;
-	parser_input = preprocess_member_function_syntax(parser_input, member_function_lines);
+	std::string parser_input = preprocess_member_function_syntax(instr, member_function_lines);
 	if (nodeAllocated) {
 		yydeleteAstNode(node, 0);
 		nodeAllocated = false;
@@ -608,8 +526,6 @@ AstNode* AuxScope::makenodes(const string& instr)
 	res = yyparse(&out, &errmsg);
 	if (out && !member_function_lines.empty())
 		mark_member_function_nodes(out, member_function_lines);
-	if (out && !async_assign_counts.empty())
-		mark_async_assign_nodes(out, async_assign_counts);
 	nodeAllocated = out ? true : false;
 	if (!errmsg && res == 2)
 	{
