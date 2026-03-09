@@ -93,10 +93,29 @@ static bool download_s3_url_to_file(const string& url, const string& outPath, st
 #else
 	string qUrl = shell_quote_posix(url);
 	string qOut = shell_quote_posix(outPath);
-	string cmd = "aws s3 cp " + qUrl + " " + qOut + " >/dev/null 2>&1";
+
+	// GUI-launched apps on macOS often have a minimal PATH that omits Homebrew bins.
+	string cmd = "PATH=/opt/homebrew/bin:/usr/local/bin:/opt/aws-cli/bin:/usr/bin:/bin:$PATH aws s3 cp "
+		+ qUrl + " " + qOut + " >/dev/null 2>&1";
 	if (system(cmd.c_str()) == 0)
 		return true;
-	errstr = "Unable to download S3 URL (aws s3 cp failed): " + url;
+
+	const char* awsCandidates[] = {
+		"/opt/homebrew/bin/aws",
+		"/usr/local/bin/aws",
+		"/opt/aws-cli/bin/aws",
+		"/usr/bin/aws"
+	};
+	for (const char* awsPath : awsCandidates) {
+		if (access(awsPath, X_OK) == 0) {
+			string absCmd = shell_quote_posix(awsPath) + " s3 cp "
+				+ qUrl + " " + qOut + " >/dev/null 2>&1";
+			if (system(absCmd.c_str()) == 0)
+				return true;
+		}
+	}
+
+	errstr = "Unable to download S3 URL (aws s3 cp failed). Ensure AWS CLI is installed and on PATH: " + url;
 	return false;
 #endif
 }
