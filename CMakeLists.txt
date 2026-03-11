@@ -13,6 +13,7 @@ project(auxe VERSION ${AUXE_VERSION} LANGUAGES C CXX)
 # -----------------------------
 option(AUXE_BUILD_SHARED      "Build auxe as a shared library" ON)
 option(AUXE_ENABLE_PORTAUDIO  "Enable PortAudio-dependent built-ins" OFF)
+option(AUXE_BUILD_TESTS       "Build auxe regression tests" ON)
 
 # -----------------------------
 # Language / compile settings
@@ -228,3 +229,18 @@ install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/auxeConfigVersion.cmake"
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/auxe
 )
+
+if(AUXE_BUILD_TESTS)
+  enable_testing()
+
+  add_executable(auxe_regression_debug_resume
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_debug_resume.cpp
+  )
+  target_link_libraries(auxe_regression_debug_resume PRIVATE auxe)
+  target_include_directories(auxe_regression_debug_resume PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  add_test(
+    NAME auxe_regression_debug_resume
+    COMMAND auxe_regression_debug_resume
+  )
+endif()

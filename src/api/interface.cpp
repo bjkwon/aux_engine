@@ -1048,6 +1048,35 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
                     return auxDebugAction::AUX_DEBUG_NO_DEBUG;
                 }
             }
+            else {
+                // Continue mode must run caller frames to completion (or next pause),
+                // not just unwind a single child frame.
+                AuxScope* run = parent;
+                while (run) {
+                    int line_hint = run->u.currentLine;
+                    if (run->pLast && run->pLast->line > 0) {
+                        line_hint = run->pLast->line;
+                    }
+                    const AstNode* run_next = (line_hint > 0)
+                        ? resolve_next_statement_after_line(run, line_hint)
+                        : nullptr;
+                    if (run_next) {
+                        run->u.debugstatus = progress;
+                        run->linebyline(run_next, true, false);
+                    }
+
+                    AuxScope* up = run->dad;
+                    if (!(up && up->son.get() == run)) {
+                        *ctx = reinterpret_cast<auxContext*>(run);
+                        return auxDebugAction::AUX_DEBUG_CONTINUE;
+                    }
+                    up->FinalizeChildUDFCall();
+                    up->CompletePendingAssignmentAfterDebugResume();
+                    run = up;
+                }
+                *ctx = reinterpret_cast<auxContext*>(parent);
+                return auxDebugAction::AUX_DEBUG_CONTINUE;
+            }
             *ctx = reinterpret_cast<auxContext*>(parent);
         }
         return auxDebugAction::AUX_DEBUG_CONTINUE;
