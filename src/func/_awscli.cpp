@@ -18,7 +18,8 @@ using json = nlohmann::json;
 //   .bucket   string  S3 bucket name (required)
 //   .langcode cell    Language codes; empty=single-id, 1=manual, 2+=multi-id
 //   .outputkey string S3 prefix for transcript JSON (default "temp/transcripts/")
-//   .basename  string Optional prefix for job name (default "awst")
+//   .basename  string Optional prefix for job name (default "auxlab")
+//   .id        string Optional custom job prefix; if text and len<=32 use id_timestamp, else first 32 chars
 
 static string shell_quote_posix(const string& s)
 {
@@ -158,7 +159,14 @@ void _awst(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	string region = get_struct_str(v.strut, "region", "us-east-1");
 	string bucket = get_struct_str(v.strut, "bucket", "");
 	string outputkey = get_struct_str(v.strut, "outputkey", "temp/transcripts/");
-	string basename = get_struct_str(v.strut, "basename", "auxlab_awst");
+	string basename = get_struct_str(v.strut, "basename", "auxlab");
+
+	// v.id overrides basename when it's a text; max 32 chars
+	auto idIt = v.strut.find("id");
+	if (idIt != v.strut.end() && ISSTRING(idIt->second.type())) {
+		string idStr = idIt->second.str();
+		basename = (idStr.size() > 32) ? idStr.substr(0, 32) : idStr;
+	}
 
 	if (bucket.empty())
 		throw exception_func(*past, pnode, "Struct must have .bucket (S3 bucket name)", "awst").raise();
@@ -254,7 +262,7 @@ void _awst(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	string outJsonKey = outputkey;
 	if (!outJsonKey.empty() && outJsonKey.back() != '/')
 		outJsonKey += "/";
-	outJsonKey += basename + ".json";
+	outJsonKey += jobname + ".json";  // use jobname (not basename) so each job has unique transcript
 
 	string transcribeCmd = "aws transcribe start-transcription-job "
 		"--region " + shell_quote_posix(region) + " "
