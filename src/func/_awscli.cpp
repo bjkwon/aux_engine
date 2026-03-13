@@ -286,6 +286,7 @@ void _awst(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		}
 		transcribeCmd += " --language-options " + shell_quote_posix(lo);
 	}
+	transcribeCmd += " --settings ChannelIdentification=true";
 
 	string jsonOutput;
 	if (!run_aws_cmd_capture(transcribeCmd, jsonOutput, errstr)) {
