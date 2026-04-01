@@ -200,6 +200,53 @@ struct ScopedTempFile
 	}
 };
 
+static bool looks_like_s3_bucket_key(const string& s)
+{
+	if (s.empty()) return false;
+	if (starts_with_http_url(s) || starts_with_s3_url(s)) return false;
+	if (s.find("://") != string::npos) return false;
+#ifdef _WIN32
+	if (s.size() >= 2 && std::isalpha((unsigned char)s[0]) && s[1] == ':')
+		return false; // likely drive path (e.g. C:\...)
+#endif
+	if (s[0] == '/' || s[0] == '\\') return false;
+	size_t slash = s.find('/');
+	if (slash == string::npos || slash == 0 || slash + 1 >= s.size()) return false;
+	return true;
+}
+
+static bool fetch_bytes_from_source(const string& source, vector<unsigned char>& out, string& errstr)
+{
+	if (is_remote_url(source))
+	{
+		string tempPath;
+		ScopedTempFile tempFile;
+		if (!make_temp_remote_path(tempPath, errstr))
+			return false;
+		if (!download_remote_url_to_file(source, tempPath, errstr))
+			return false;
+		tempFile.path = tempPath;
+		return read_file_binary(tempPath, out, errstr);
+	}
+	if (read_file_binary(source, out, errstr))
+		return true;
+
+	// If local open fails, support "bucket/key" shorthand as an S3 source.
+	if (looks_like_s3_bucket_key(source))
+	{
+		string tempPath;
+		ScopedTempFile tempFile;
+		string s3url = "s3://" + source;
+		if (!make_temp_remote_path(tempPath, errstr))
+			return false;
+		if (!download_remote_url_to_file(s3url, tempPath, errstr))
+			return false;
+		tempFile.path = tempPath;
+		return read_file_binary(tempPath, out, errstr);
+	}
+	return false;
+}
+
 Cfunction set_builtin_function_wave(fGate fp)
 {
 	Cfunction ft;
@@ -232,6 +279,24 @@ Cfunction set_builtin_function_file(fGate fp)
 	vector<string> desc_arg_opt = { };
 	vector<CVar> default_arg = { };
 	ft.defaultarg = default_arg;
+	set<uint16_t> allowedTypes1 = { TYPEBIT_STRING + 1, TYPEBIT_STRING + 2, };
+	ft.allowed_arg_types.push_back(allowedTypes1);
+	ft.desc_arg_req = desc_arg_req;
+	ft.desc_arg_opt = desc_arg_opt;
+	ft.narg1 = desc_arg_req.size();
+	ft.narg2 = ft.narg1 + default_arg.size();
+	return ft;
+}
+
+Cfunction set_builtin_function_fget(fGate fp)
+{
+	Cfunction ft;
+	set<uint16_t> allowedTypes;
+	ft.func = fp;
+	ft.alwaysstatic = true;
+	vector<string> desc_arg_req = { "source", };
+	vector<string> desc_arg_opt = { };
+	vector<CVar> default_arg = { };
 	set<uint16_t> allowedTypes1 = { TYPEBIT_STRING + 1, TYPEBIT_STRING + 2, };
 	ft.allowed_arg_types.push_back(allowedTypes1);
 	ft.desc_arg_req = desc_arg_req;
@@ -1169,4 +1234,20 @@ void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			throw exception_func(*past, pnode, "Cannot read file").raise();
 		break;
 	}
+}
+
+void _fget(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
+{
+	string source = past->Sig.str();
+	vector<unsigned char> bytes;
+	string errstr;
+	if (!fetch_bytes_from_source(source, bytes, errstr))
+		throw exception_func(*past, pnode, errstr).raise();
+
+	past->Sig.Reset(1);
+	past->Sig.bufBlockSize = 1;
+	past->Sig.UpdateBuffer(bytes.size());
+	if (!bytes.empty())
+		memcpy(past->Sig.strbuf, bytes.data(), bytes.size());
+	past->Sig.SetByte();
 }
