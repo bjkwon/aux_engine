@@ -3462,7 +3462,17 @@ yyreduce:
     {
 		(yyval.pnode) = (yyvsp[(1) - (3)].pnode);
 		AstNode * p = (AstNode *)(yyvsp[(1) - (3)].pnode)->str;
-		p->tail = p->tail->next = (AstNode *)(yyvsp[(3) - (3)].pnode);
+		if (p->tail)
+			p->tail = p->tail->next = (AstNode *)(yyvsp[(3) - (3)].pnode);
+		else
+		{
+			AstNode *row0 = newAstNode(N_VECTOR, (yyloc));
+			AstNode *inner0 = newAstNode(N_VECTOR, (yyloc));
+			row0->str = (char *)inner0;
+			row0->next = (AstNode *)(yyvsp[(3) - (3)].pnode);
+			p->alt = row0;
+			p->tail = (AstNode *)(yyvsp[(3) - (3)].pnode);
+		}
 	;}
     break;
 

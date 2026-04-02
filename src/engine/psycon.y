@@ -760,7 +760,17 @@ matrix: /* empty */
 	{
 		$$ = $1;
 		AstNode * p = (AstNode *)$1->str;
-		p->tail = p->tail->next = (AstNode *)$3;
+		if (p->tail)
+			p->tail = p->tail->next = (AstNode *)$3;
+		else
+		{ /* leading ';' ([; x]): first row empty, second row is $3 */
+			AstNode *row0 = newAstNode(N_VECTOR, @$);
+			AstNode *inner0 = newAstNode(N_VECTOR, @$);
+			row0->str = (char *)inner0;
+			row0->next = (AstNode *)$3;
+			p->alt = row0;
+			p->tail = (AstNode *)$3;
+		}
 	}
 	| matrix ';'
 ;
