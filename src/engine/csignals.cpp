@@ -2685,8 +2685,42 @@ CSignals& CSignals::operator/=(auxtype con)
 	return *this;
 }
 
+// Pad one channel to the end so stereo LHS channels share the same duration before ++.
+// Without this, [noise(300);]++[;noise(500)] leaves R at length 0 and RHS appends at t=0.
+static void PadChannelEndWithSilence(CTimeSeries* ch, double padMs)
+{
+	if (!ch || padMs <= 1e-9) return;
+	const int fs = ch->GetFs();
+	if (fs <= 2) return;
+	const unsigned nNew = (unsigned)round(padMs / 1000.0 * (double)fs);
+	if (nNew == 0) return;
+	CTimeSeries* tail = ch->GetDeepestChain();
+	const unsigned n0 = (unsigned)tail->nSamples;
+	tail->UpdateBuffer((uint64_t)n0 + (uint64_t)nNew);
+}
+
 const CSignals& CSignals::operator+=(CSignals *yy)
 {
+	// Align durations within each operand (L/R) so ++ appends in lockstep. Otherwise one
+	// channel can stay short (e.g. [noise(300);]) and the other operand’s audio starts at t=0.
+	auto alignStereoPair = [](CTimeSeries* left, CTimeSeries* right) {
+		if (!left || !right) return;
+		const double dL = left->CTimeSeries::alldur();
+		const double dR = right->CTimeSeries::alldur();
+		const double maxDur = max(dL, dR);
+		if (maxDur <= 0.) return;
+		const double eps = 1e-9;
+		if (dL + eps < maxDur)
+			PadChannelEndWithSilence(left, maxDur - dL);
+		if (dR + eps < maxDur)
+			PadChannelEndWithSilence(right, maxDur - dR);
+	};
+
+	if (next && yy) {
+		alignStereoPair(this, next);
+		if (yy->next)
+			alignStereoPair(yy, yy->next);
+	}
 	CTimeSeries::operator+=(yy);
 	if (next) {
 		if (yy->next)

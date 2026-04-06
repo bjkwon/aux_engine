@@ -2150,9 +2150,17 @@ CVar* AuxScope::NodeMatrix(const AstNode* pnode)
 				p->next->alt = NULL;
 			esig = Compute(p->next);
 			blockCellStruct2(*this, pnode, esig);
-			if (audio == 0 && (esig.IsAudio()|| ISTSEQ(esig.type())))
+			if (audio == 0 && (ISAUDIO(esig.type()) || ISTSEQ(esig.type())))
 			{
 				if (p->next->next)	throw exception_etc(*this, pnode, "Currently two channels or less for audio signals or t-series are allowed.").raise();
+				/* e.g. [; noise(30)] — first row is an empty vector: tsig is fs==1, nSamples==0.
+				   SetNextChan on that does not yield a stereo audio object; mirror [noise(30);] which uses
+				   CSignals(tsig.GetFs()) for the silent channel. */
+				if (tsig.IsEmpty())
+				{
+					tsig = CSignals(esig.GetFs());
+					blockCellStruct2(*this, pnode, tsig);
+				}
 				tsig.SetNextChan(esig);
 			}
 			else if (audio > 0)

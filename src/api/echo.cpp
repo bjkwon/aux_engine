@@ -68,7 +68,11 @@ string echo_object::tmarks(const CTimeSeries& sig, bool unit)
 	int kk(0), tint(sig.CountChains());
 	for (const CTimeSeries* xp = &sig; kk < tint; kk++, xp = xp->chain) {
 		out << "(" << format_time_readable(xp->tmark);
-		out << "~" << format_time_readable(xp->tmark + 1000. * xp->nSamples / xp->GetFs());
+		double endmark = xp->tmark;
+		const int xfs = xp->GetFs();
+		if (xfs > 0)
+			endmark += 1000. * static_cast<double>(xp->nSamples) / static_cast<double>(xfs);
+		out << "~" << format_time_readable(endmark);
 		out << ") ";
 	}
 	kk = 0;
@@ -141,13 +145,27 @@ string echo_object::row(const CTimeSeries& obj, unsigned int id0, int offset, in
 	out.precision(prec);
 	unsigned int k = 0;
 	vector<int> idx;
-	idx.reserve(obj.Len());
-	if (tbht == "head")
-		for (int k = 0; k < min(display_limit_x, obj.Len()); k++) idx.push_back(k);
-	else if (tbht == "tail")
-		for (int k = obj.Len() - display_limit_x; k < obj.Len(); k++) idx.push_back(k);
-	else
-		for (int k = 0; k < min(10, obj.Len()); k++) idx.push_back(k);
+	out << tbht;
+	cout << out.str() << endl;
+	const int L = static_cast<int>(obj.Len());
+	const int limX = (display_limit_x > 0) ? display_limit_x : 10;
+	idx.reserve(static_cast<size_t>(max(0, L)));
+	if (tbht == "head") {
+		for (int j = 0; j < min(limX, L); j++) idx.push_back(j);
+	} else if (tbht == "tail") {
+		if (L > 0) {
+			const int start = max(0, L - limX);
+			for (int j = start; j < L; j++) idx.push_back(j);
+		}
+	} else {
+		for (int j = 0; j < min(10, L); j++) idx.push_back(j);
+	}
+	if (idx.empty()) {
+		for (int m = 0; m < offset; m++) out << " ";
+		out.precision(org_precision);
+		out << postscript << "\n";
+		return out.str();
+	}
 	if (idx.front() != 0) {
 		if (ISSTRINGG(obj.type())) out << "...";
 		else	out << "... ";
@@ -192,13 +210,25 @@ string echo_object::print_vector(const CTimeSeries& obj, int offset)
 {
 	stringstream ss;
 	vector<int> idx;
-	idx.reserve(obj.nGroups);
-	if (tbht == "top")
-		for (int k = 0; k < min(display_limit_x, obj.nGroups); k++) idx.push_back(k);
-	else if (tbht == "bottom")
-		for (int k = obj.nGroups - display_limit_x; k < obj.nGroups; k++) idx.push_back(k);
-	else
-		for (int k = 0; k < min(display_limit_y, obj.nGroups); k++) idx.push_back(k);
+	const int ng = static_cast<int>(obj.nGroups);
+	const int limX = (display_limit_x > 0) ? display_limit_x : 10;
+	const int limY = (display_limit_y > 0) ? display_limit_y : 10;
+	idx.reserve(static_cast<size_t>(max(0, ng)));
+	if (tbht == "top") {
+		for (int j = 0; j < min(limX, ng); j++) idx.push_back(j);
+	} else if (tbht == "bottom") {
+		if (ng > 0) {
+			const int start = max(0, ng - limX);
+			for (int j = start; j < ng; j++) idx.push_back(j);
+		}
+	} else {
+		for (int j = 0; j < min(limY, ng); j++) idx.push_back(j);
+	}
+	if (idx.empty()) {
+		for (int m = 0; m < offset; m++) ss << " ";
+		ss << postscript << "\n";
+		return ss.str();
+	}
 	if (idx.front() != 0)
 	{
 		ss << endl;

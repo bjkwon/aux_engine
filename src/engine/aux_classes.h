@@ -88,13 +88,14 @@ typedef void (*fmodify) (auxtype*, uint64_t, void*, void*);
 #define ISBOOLG(X)          (((X) & 0x00F0) == TYPEBIT_SIZE1) // struct or cell with a surface CSignals object
 #define ISCOMPLEX(X)        (((X) & 0b01100000) == TYPEBIT_COMPLEX) // An actual complex array, regardless of length 
 #define ISCOMPLEXG(X)       (((X) & (0xFF00+0b01100000)) == TYPEBIT_COMPLEX) // struct or cell with a surface CSignals object
-#define ISAUDIO(X)          (((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 2 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 2 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 3 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 3) // An actual audio array
+/* Whole expression parenthesized: without this, `a && ISAUDIO(x)` parses as `(a && cmp1) || cmp2 || ...`. */
+#define ISAUDIO(X)          ((((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 2 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 2 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 3 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 3))
 #define ISAUDIOG(X)         (((X) & 0x00FF) == TYPEBIT_TEMPO_ONE + 2 || ((X) & 0x00FF) == TYPEBIT_TEMPO_CHAINS + 2 || ((X) & 0x00FF) == TYPEBIT_TEMPO_ONE + 3 || ((X) & 0x00FF) == TYPEBIT_TEMPO_CHAINS + 3) // An actual audio array
 // tseq means chained scalars, including an unchanged timed value (customarily a value timed at zero is not considered a tseq, but it is not prohibited)
-#define ISTSEQ(X)           (((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 1 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 1) // An actual audio array
+#define ISTSEQ(X)           ((((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 1 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 1))
 #define ISTSEQG(X)          (((X) & 0x00FF) == TYPEBIT_TEMPO_ONE + 1 || ((X) & 0x00FF) == TYPEBIT_TEMPO_CHAINS + 1) // An actual audio array
 // tshot means chained vectors or string including an unchanged one (customarily a vector/string timed at zero is not considered a tseq, but it is not prohibited)
-#define ISTSHOT(X)          (((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 2 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 2) // An actual audio array
+#define ISTSHOT(X)          ((((X) & 0xF0FF) == TYPEBIT_TEMPO_ONE + 2 || ((X) & 0xF0FF) == TYPEBIT_TEMPO_CHAINS + 2))
 #define ISTSHOTG(X)         (((X) & 0x00FF) == TYPEBIT_TEMPO_ONE + 2 || ((X) & 0x00FF) == TYPEBIT_TEMPO_CHAINS + 2)
 // Stereo applies to any temporal object, regardless of audio, tseq or tshot. If you need a stereo audio, then ISSTEREO and ISAUDIO
 #define ISSTEREO(X)         ((X) & (TYPEBIT_MULTICHANS + 0xF000))
@@ -611,6 +612,15 @@ public:
 				out -= TYPEBIT_TEMPO_ONE;
 				out += TYPEBIT_TEMPO_CHAINS;
 			}
+		}
+		/* [; x]: first chan empty @ audio fs, second is audio — without this, out stays 0 and only
+		   MULTICHANS is set (0x0100); [x;] uses first chan's audio bits → 0x0106. Align the two. */
+		if (next && nSamples == 0 && (fs == 0 || fs > 500) && !chain)
+		{
+			const uint16_t nt = next->CSignals::type();
+			const uint16_t nbase = (uint16_t)(nt & ~TYPEBIT_MULTICHANS);
+			if (ISAUDIO(nbase) || ISTSEQ(nbase))
+				out = nbase;
 		}
 		if (next)
 			out += TYPEBIT_MULTICHANS;
