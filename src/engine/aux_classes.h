@@ -638,6 +638,7 @@ public:
 	vector<CVar> cell;
 	map<std::string, CVar> strut;
 	map<std::string, vector<CVar *>> struts;
+	bool runtimeHandle = false;
 
 	bool functionEvalRes;
 
@@ -647,6 +648,8 @@ public:
 	bool IsEmpty() const { return (!chain && !next && nSamples == 0 && cell.empty() && strut.empty() && struts.empty()); }
 	CVar& Reset(int fs2set = 0);
 	bool IsGO() const;
+	void MarkHandle(bool enabled = true) { runtimeHandle = enabled; }
+	bool IsRuntimeHandle() const { return runtimeHandle; }
 
 	CSignals evoke_getsig2(CSignal(*fp) (auxtype*, unsigned int, void*, void*), void* popt1 = NULL, void* popt = NULL);
 
@@ -693,6 +696,7 @@ public:
 			out += TYPEBIT_STRUT;
 			if (!struts.empty()) out += TYPEBIT_HANDLE;
 		}
+		if (runtimeHandle) out += TYPEBIT_HANDLE;
 		else if (fs == 3)		out += TYPEBIT_STRUT + TYPEBIT_HANDLE;
 		return out;
 	}

@@ -415,6 +415,38 @@ bool aux_is_audio(const AuxObj& v)
     return ISAUDIO(t) || ISAUDIOG(t);
 }
 
+size_t aux_vector_length(const AuxObj& v)
+{
+    if (!v) return 0;
+    const CVar* cv = asCVar(v);
+    const auto t = cv->type();
+    if (ISSTRING(t) || ISAUDIO(t) || ISAUDIOG(t))
+        return 0;
+    if (ISSCALAR(t))
+        return 1;
+    if (!ISVECTOR(t))
+        return 0;
+    return static_cast<size_t>(cv->nSamples);
+}
+
+size_t aux_copy_vector(const AuxObj& v, auxtype* out, size_t max_len)
+{
+    if (!v || !out) return 0;
+    const size_t len = aux_vector_length(v);
+    if (len == 0 || max_len < len)
+        return 0;
+    const CVar* cv = asCVar(v);
+    if (len == 1) {
+        out[0] = cv->value();
+        return 1;
+    }
+    const vector<auxtype> values = cv->ToVector();
+    if (values.size() != len)
+        return 0;
+    memcpy(out, values.data(), len * sizeof(auxtype));
+    return len;
+}
+
 int aux_num_channels(const AuxObj& v)
 {
     const CSignals* ch = asCSignals(v);
@@ -562,9 +594,16 @@ int aux_del_var(auxContext* ctx, const string& varname)
     auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return -1;
     auto it = frame->Vars.find(varname);
-    if (it == frame->Vars.end()) return 1;
-    frame->Vars.erase(it);
-    return 0;
+    if (it != frame->Vars.end()) {
+        frame->Vars.erase(it);
+        return 0;
+    }
+    auto jt = frame->GOvars.find(varname);
+    if (jt != frame->GOvars.end()) {
+        frame->GOvars.erase(jt);
+        return 0;
+    }
+    return 1;
 }
 
 int aux_get_vars(auxContext* ctx, vector<string>& vars)
@@ -572,6 +611,8 @@ int aux_get_vars(auxContext* ctx, vector<string>& vars)
     auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return -1;
     for (auto v : frame->Vars)
+        vars.push_back(v.first);
+    for (auto v : frame->GOvars)
         vars.push_back(v.first);
     return 0;
 }
@@ -582,9 +623,13 @@ AuxObj aux_get_var(auxContext* ctx, const string& varname)
     if (!frame) return nullptr;
 
     auto it = frame->Vars.find(varname);
-    if (it == frame->Vars.end()) return nullptr;
-    const CVar* cv = &it->second;
-    return reinterpret_cast<AuxObj>(cv);
+    if (it != frame->Vars.end()) {
+        const CVar* cv = &it->second;
+        return reinterpret_cast<AuxObj>(cv);
+    }
+    auto jt = frame->GOvars.find(varname);
+    if (jt == frame->GOvars.end() || jt->second.empty()) return nullptr;
+    return reinterpret_cast<AuxObj>(jt->second.front());
 }
 
 vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname)
@@ -657,17 +702,22 @@ int aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uin
             }
         } else {
             const CVar* cv = asCVar(v);
-            size = format_non_audio_size(cv);
-            if ((type & 0xFFF0) == TYPEBIT_STRING) {
-                preview = truncate_text(cv->str(), cfg.display_limit_str);
-                string_preview = true;
+            if ((type & TYPEBIT_HANDLE) != 0) {
+                size = "1";
+                preview = cv->valuestr(cfg.display_precision);
             } else {
-                const std::string raw = show_preview(*cv, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
-                preview = strip_preview_header(raw);
-                // Scalar previews can be a single-line output where header stripping removes the value.
-                // In that case, keep the raw scalar expression result.
-                if (preview.empty() && (type & 0x000F) == 1) {
-                    preview = raw;
+                size = format_non_audio_size(cv);
+                if ((type & 0xFFF0) == TYPEBIT_STRING) {
+                    preview = truncate_text(cv->str(), cfg.display_limit_str);
+                    string_preview = true;
+                } else {
+                    const std::string raw = show_preview(*cv, cfg.display_precision, cfg.display_limit_x, cfg.display_limit_y, cfg.display_limit_bytes);
+                    preview = strip_preview_header(raw);
+                    // Scalar previews can be a single-line output where header stripping removes the value.
+                    // In that case, keep the raw scalar expression result.
+                    if (preview.empty() && (type & 0x000F) == 1) {
+                        preview = raw;
+                    }
                 }
             }
         }
@@ -861,6 +911,8 @@ vector<string> aux_enum_vars(auxContext* ctx)
         return out;  // null pointer or environment not initialized
     }
     for (auto v : frame->Vars)
+        out.push_back(v.first);
+    for (auto v : frame->GOvars)
         out.push_back(v.first);
     return out;
 }

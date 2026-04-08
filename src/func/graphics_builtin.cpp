@@ -2,6 +2,13 @@
 
 namespace {
 
+void set_handle_result(CVar& out, std::uint64_t id)
+{
+	out.Reset(1);
+	out.SetValue(static_cast<auxtype>(id));
+	out.MarkHandle(true);
+}
+
 const AstNode* first_arg_node(const AstNode* pnode)
 {
 	if (!pnode || !pnode->alt) return nullptr;
@@ -68,7 +75,7 @@ void set_current_handle_result(AuxScope* past,
 		past->Sig.Reset();
 		return;
 	}
-	past->Sig.SetValue(static_cast<auxtype>(id));
+	set_handle_result(past->Sig, id);
 }
 
 } // namespace
@@ -118,7 +125,7 @@ void _figure(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (err.empty()) err = "Failed to create figure.";
 			throw exception_etc(*past, pnode, err).raise();
 		}
-		past->Sig.SetValue(static_cast<auxtype>(id));
+		set_handle_result(past->Sig, id);
 		return;
 	}
 
@@ -145,7 +152,7 @@ void _figure(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (err.empty()) err = "Failed to resolve figure(handle).";
 			throw exception_etc(*past, pnode, err).raise();
 		}
-		past->Sig.SetValue(static_cast<auxtype>(id));
+		set_handle_result(past->Sig, id);
 		return;
 	}
 
@@ -165,7 +172,7 @@ void _figure(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (err.empty()) err = "Failed to create figure.";
 			throw exception_etc(*past, pnode, err).raise();
 		}
-		past->Sig.SetValue(static_cast<auxtype>(id));
+		set_handle_result(past->Sig, id);
 		return;
 	}
 
@@ -185,7 +192,7 @@ void _figure(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (err.empty()) err = "Failed to create named figure.";
 			throw exception_etc(*past, pnode, err).raise();
 		}
-		past->Sig.SetValue(static_cast<auxtype>(id));
+		set_handle_result(past->Sig, id);
 		return;
 	}
 
@@ -207,7 +214,7 @@ void _axes(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (err.empty()) err = "Failed to create axes.";
 			throw exception_etc(*past, pnode, err).raise();
 		}
-		past->Sig.SetValue(static_cast<auxtype>(id));
+		set_handle_result(past->Sig, id);
 		return;
 	}
 
@@ -234,7 +241,7 @@ void _axes(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (err.empty()) err = "Failed to resolve axes(handle).";
 			throw exception_etc(*past, pnode, err).raise();
 		}
-		past->Sig.SetValue(static_cast<auxtype>(id));
+		set_handle_result(past->Sig, id);
 		return;
 	}
 
@@ -254,7 +261,7 @@ void _axes(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (err.empty()) err = "Failed to create axes.";
 			throw exception_etc(*past, pnode, err).raise();
 		}
-		past->Sig.SetValue(static_cast<auxtype>(id));
+		set_handle_result(past->Sig, id);
 		return;
 	}
 
@@ -325,7 +332,7 @@ void _plot(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		if (err.empty()) err = "Failed to create plot.";
 		throw exception_etc(*past, pnode, err).raise();
 	}
-	past->Sig.SetValue(static_cast<auxtype>(id));
+	set_handle_result(past->Sig, id);
 }
 
 void _line(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
@@ -335,40 +342,44 @@ void _line(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	if (!past->pEnv->graphics_backend.line)
 		throw exception_etc(*past, pnode, "The active graphics backend does not provide line() support yet.").raise();
 
-	if (args.empty() || args.size() > 3)
+	int actualCount = 0;
+	for (const AstNode* an = first_arg_node(pnode); an; an = an->next)
+		++actualCount;
+	if (actualCount <= 0 || actualCount > 3 || args.size() < static_cast<size_t>(actualCount))
 		throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
 
 	uint64_t targetHandle = 0;
 	const CVar* xObj = nullptr;
 	const CVar* yObj = nullptr;
+	const CVar* firstActual = &past->Sig;
 
-	if (args.size() == 1) {
-		xObj = &args[0];
+	if (actualCount == 1) {
+		xObj = firstActual;
 	}
-	else if (args.size() == 2) {
-		if (ISSCALAR(args[0].type())) {
-			const double handleValue = args[0].value();
+	else if (actualCount == 2) {
+		if (ISSCALAR(firstActual->type())) {
+			const double handleValue = firstActual->value();
 			const double rounded = std::round(handleValue);
 			if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
 				throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
 			targetHandle = static_cast<uint64_t>(rounded);
-			xObj = &args[1];
+			xObj = &args[0];
 		}
 		else {
-			xObj = &args[0];
-			yObj = &args[1];
+			xObj = firstActual;
+			yObj = &args[0];
 		}
 	}
 	else {
-		if (!ISSCALAR(args[0].type()))
+		if (!ISSCALAR(firstActual->type()))
 			throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
-		const double handleValue = args[0].value();
+		const double handleValue = firstActual->value();
 		const double rounded = std::round(handleValue);
 		if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
 			throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
 		targetHandle = static_cast<uint64_t>(rounded);
-		xObj = &args[1];
-		yObj = &args[2];
+		xObj = &args[0];
+		yObj = &args[1];
 	}
 
 	string err;
@@ -382,7 +393,7 @@ void _line(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		if (err.empty()) err = "Failed to create line.";
 		throw exception_etc(*past, pnode, err).raise();
 	}
-	past->Sig.SetValue(static_cast<auxtype>(id));
+	set_handle_result(past->Sig, id);
 }
 
 void _text(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)

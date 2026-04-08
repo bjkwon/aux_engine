@@ -191,6 +191,7 @@ CVar& CVar::operator=(const CSignals& rhs)
 {
 	Reset();
 	CSignals::operator=(rhs);
+	runtimeHandle = false;
 	return *this;
 }
 
@@ -204,6 +205,7 @@ CVar& CVar::operator=(const CVar& rhs)
 		cell = rhs.cell;
 		strut = rhs.strut;
 		struts = rhs.struts;
+		runtimeHandle = rhs.runtimeHandle;
 	}
 	return *this;
 }
@@ -2952,6 +2954,7 @@ int CSignals::WriteAXL(FILE* fp)
 
 bool CVar::IsHandle() const
 {
+	if (runtimeHandle) return true;
 	if (fs == 3) return true;
 	if (strut.empty()) return false;
 	if (strut.find("type") == strut.end()) return false;
@@ -2968,7 +2971,15 @@ bool CVar::IsHandle() const
 
 bool CVar::IsGO() const
 { // Compatibility alias for legacy graphics-object checks.
-	return IsHandle();
+	if (fs == 3) return true;
+	if (runtimeHandle) return false;
+	if (strut.empty()) return false;
+	if (strut.find("type") == strut.end()) return false;
+	if (strut.find("color") == strut.end()) return false;
+	if (strut.find("userdata") == strut.end()) return false;
+	if (strut.find("tag") == strut.end()) return false;
+	if (strut.find("visible") == strut.end()) return false;
+	return true;
 }
 
 CVar&  CVar::length()
@@ -3015,6 +3026,7 @@ CVar& CVar::Reset(int fs2set)
 	cell.clear();
 	strut.clear();
 	struts.clear();
+	runtimeHandle = false;
 	return *this;
 }
 

@@ -140,6 +140,8 @@ AUXE_API int         aux_eval(auxContext** ctx, const string& script, const auxC
 AUXE_API int         aux_del_var(auxContext* ctx, const string& varname);
 AUXE_API uint16_t    aux_type(const AuxObj& v);
 AUXE_API bool        aux_is_audio(const AuxObj& v);
+AUXE_API size_t      aux_vector_length(const AuxObj& v);
+AUXE_API size_t      aux_copy_vector(const AuxObj& v, auxtype* out, size_t max_len);
 AUXE_API int         aux_num_channels(const AuxObj& v);
 AUXE_API int         aux_num_segments(const AuxObj& v, int channel_index);
 AUXE_API bool        aux_get_segment(const AuxObj& v, int channel_index, int segment_index, AuxSignal& out);
