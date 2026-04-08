@@ -195,3 +195,11 @@ void _sin(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 
 DECL_GATE(_pitchtime)
 DECL_GATE(_awst)
+DECL_GATE(_figure)
+DECL_GATE(_axes)
+DECL_GATE(_plot)
+DECL_GATE(_line)
+DECL_GATE(_text)
+DECL_GATE(_delete)
+DECL_GATE(_gcf)
+DECL_GATE(_gca)

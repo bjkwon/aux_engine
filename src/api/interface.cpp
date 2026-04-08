@@ -933,6 +933,50 @@ AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname)
         return 1;
 }
 
+int aux_install_graphics_backend(auxContext* ctx, const auxGraphicsBackend& backend)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return 1;
+    }
+    if (!backend.notify) {
+        return 1;
+    }
+    frame->pEnv->graphics_backend = backend;
+    return 0;
+}
+
+int aux_clear_graphics_backend(auxContext* ctx)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return 1;
+    }
+    frame->pEnv->graphics_backend = auxGraphicsBackend{};
+    return 0;
+}
+
+bool aux_has_graphics_backend(auxContext* ctx)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    return ctx && frame->pEnv && frame->pEnv->graphics_backend.notify != nullptr;
+}
+
+int aux_graphics_notify(auxContext* ctx, const auxGraphicsEvent& event, string& errstr)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        errstr = "Graphics backend is not available.";
+        return 1;
+    }
+    auto& backend = frame->pEnv->graphics_backend;
+    if (!backend.notify) {
+        errstr = "Graphics backend is not installed.";
+        return 1;
+    }
+    return backend.notify(backend.userdata, event, errstr);
+}
+
 auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
 {
     if (!ctx || !*ctx) return auxDebugAction::AUX_DEBUG_ABORT_BASE;

@@ -129,7 +129,7 @@ Cfunction set_builtin_function_awst(fGate fp)
 	vector<CVar> default_arg = { };
 	set<uint16_t> allowedTypes1 = { ALL_AUDIO_TYPES };
 	ft.allowed_arg_types.push_back(allowedTypes1);
-	set<uint16_t> allowedTypes2 = { TYPEBIT_STRUT, TYPEBIT_STRUTS };
+	set<uint16_t> allowedTypes2 = { TYPEBIT_STRUT, TYPEBIT_HANDLE };
 	ft.allowed_arg_types.push_back(allowedTypes2);
 	// qualify/reject per arg: arg1=audio, arg2=struct (when qualify present, allowedTypes is bypassed)
 	set<pfunc_typecheck> qualifyAudio = { Cfunction::IsAUDIO };

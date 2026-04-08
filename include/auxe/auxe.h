@@ -44,6 +44,15 @@ enum class auxEvalStatus {
     AUX_EVAL_PAUSED = 2
 };
 
+enum class auxGraphicsEventKind {
+    AUX_GRAPHICS_OBJECT_CREATED = 0,
+    AUX_GRAPHICS_OBJECT_DELETED,
+    AUX_GRAPHICS_PROPERTY_CHANGED,
+    AUX_GRAPHICS_CURRENT_FIGURE_CHANGED,
+    AUX_GRAPHICS_CURRENT_AXES_CHANGED,
+    AUX_GRAPHICS_NAMED_PLOT_SOURCE_UPDATED
+};
+
 struct auxDebugInfo {
     auxContext** ctx;   // current context / frame
     string filename;
@@ -51,8 +60,20 @@ struct auxDebugInfo {
 };
 
 using auxDebugHook = auxDebugAction(*)(const auxDebugInfo&);
+using auxGraphicsNotifyHook = int(*)(void* userdata, const struct auxGraphicsEvent& event, string& errstr);
 
 typedef double auxtype;
+
+struct auxGraphicsEvent {
+    auxGraphicsEventKind kind = auxGraphicsEventKind::AUX_GRAPHICS_OBJECT_CREATED;
+    AuxObj object = nullptr;
+    string property_name;
+};
+
+struct auxGraphicsBackend {
+    void* userdata = nullptr;
+    auxGraphicsNotifyHook notify = nullptr;
+};
 
 struct auxStruct {
     const void* data;         // pointer to interleaved samples
@@ -128,6 +149,11 @@ AUXE_API auxDebugAction aux_handle_debug_key(auxContext* ctx, const string& inst
 AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname);
 AUXE_API auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act);
 AUXE_API int aux_poll_async(auxContext* ctx); // returns number of completed async assignments committed
+
+AUXE_API int aux_install_graphics_backend(auxContext* ctx, const auxGraphicsBackend& backend);
+AUXE_API int aux_clear_graphics_backend(auxContext* ctx);
+AUXE_API bool aux_has_graphics_backend(auxContext* ctx);
+AUXE_API int aux_graphics_notify(auxContext* ctx, const auxGraphicsEvent& event, string& errstr);
 
 // Optional: query where we are paused
 AUXE_API int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out);

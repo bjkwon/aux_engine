@@ -1,7 +1,7 @@
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
 
-// Block a cell, strut or struts object; used for function args
+// Block a cell, struct, or handle object; used for function args
 void blockCellStruct1(const AuxScope& sc, const AstNode* pnode, const CVar& checkthis, const string& fname, int id)
 {
 	if (checkthis.GetFs() == 3)
@@ -12,7 +12,7 @@ void blockCellStruct1(const AuxScope& sc, const AstNode* pnode, const CVar& chec
 		throw exception_func(sc, pnode, "struct object", fname, id).raise();
 }
 
-// Block a cell, strut or struts object; used for non-function operands
+// Block a cell, struct, or handle object; used for non-function operands
 void blockCellStruct2(const AuxScope& sc, const AstNode* pnode, const CVar& checkthis, int id)
 {
 	if (checkthis.GetFs() == 3)
@@ -51,7 +51,7 @@ void blockLogical2(const AuxScope& sc, const AstNode* pnode, const CVar& checkth
 }
 
 void ensureVector1(const AuxScope& sc, const AstNode* pnode, const CVar& checkthis, const string& fname, int id)
-{ // Vector must not be temporal; must not be GO, cell, strut
+{ // Vector must not be temporal; must not be handle, cell, or struct
 	if (ISTEMPORAL(checkthis.type()))
 	{
 		string msg("Audio or tseq object not allowed.");
@@ -59,15 +59,15 @@ void ensureVector1(const AuxScope& sc, const AstNode* pnode, const CVar& checkth
 	}
 	if (checkthis.type() & TYPEBIT_CELL ||
 		checkthis.type() & TYPEBIT_STRUT ||
-		checkthis.type() & TYPEBIT_STRUTS)
+		checkthis.type() & TYPEBIT_HANDLE)
 	{
-		string msg("GO, cell, or class objects not allowed.");
+		string msg("Handle, cell, or class objects not allowed.");
 		throw exception_func(sc, pnode, msg, fname, id).raise();
 	}
 }
 
 void ensureVector2(const AuxScope& sc, const AstNode* pnode, const CVar& checkthis, int id)
-{ // Vector must not be temporal; must not be GO, cell, strut
+{ // Vector must not be temporal; must not be handle, cell, or struct
 	if (ISTEMPORAL(checkthis.type()))
 	{
 		string msg("Audio or tseq object not allowed.");
@@ -75,9 +75,9 @@ void ensureVector2(const AuxScope& sc, const AstNode* pnode, const CVar& checkth
 	}
 	if (checkthis.type() & TYPEBIT_CELL ||
 		checkthis.type() & TYPEBIT_STRUT ||
-		checkthis.type() & TYPEBIT_STRUTS)
+		checkthis.type() & TYPEBIT_HANDLE)
 	{
-		string msg("GO, cell, or class objects not allowed.");
+		string msg("Handle, cell, or class objects not allowed.");
 		throw exception_misuse(sc, pnode, msg, id).raise();
 	}
 }
@@ -91,9 +91,9 @@ void ensureVector3(const AuxScope& sc, const AstNode* pnode, const CVar& checkth
 	}
 	if (checkthis.type() & TYPEBIT_CELL ||
 		checkthis.type() & TYPEBIT_STRUT ||
-		checkthis.type() & TYPEBIT_STRUTS)
+		checkthis.type() & TYPEBIT_HANDLE)
 	{
-		string msg = errormsg + " GO, cell, or class objects not allowed.";
+		string msg = errormsg + " Handle, cell, or class objects not allowed.";
 		throw exception_etc(sc, pnode, msg).raise();
 	}
 }

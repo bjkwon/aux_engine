@@ -2,6 +2,7 @@
 #include <cstring>
 #include <memory> // unique_ptr
 #include <set>
+#include <auxe/auxe.h>
 #include "aux_classes.h"
 #include "psycon.yacc.h"
 #include "psycon.tab.h"
@@ -124,7 +125,8 @@ public:
 	static bool IsTEMPORAL(uint16_t tp) { return (tp & 0xFF0C) == TYPEBIT_TEMPO_ONE || (tp & 0xFF0C) == TYPEBIT_TEMPO_CHAINS || (tp & 0xFF0C) == TYPEBIT_TEMPO_CHAINS_SNAP; };
 	static bool IsTEMPORALG(uint16_t tp) { return (tp & 0x000C) == TYPEBIT_TEMPO_ONE || (tp & 0x000C) == TYPEBIT_TEMPO_CHAINS || (tp & 0x000C) == TYPEBIT_TEMPO_CHAINS_SNAP; };
 	static bool IsCell(uint16_t tp) { return (tp & TYPEBIT_CELL) != 0; };
-	static bool IsSTRUT(uint16_t tp) { return  (( tp & TYPEBIT_STRUT) | (tp & TYPEBIT_STRUTS)) != 0; };
+	static bool IsSTRUT(uint16_t tp) { return  (( tp & TYPEBIT_STRUT) | (tp & TYPEBIT_HANDLE)) != 0; };
+	static bool IsHANDLE(uint16_t tp) { return (tp & TYPEBIT_HANDLE) != 0; };
 	static bool IsPureCell(uint16_t tp) { return (tp & TYPEBIT_CELL) != 0 && (tp & 0x00FF) == 0; };
 	static bool IsCellWithFace(uint16_t tp) { return (tp & TYPEBIT_CELL) != 0 && (tp & 0x00FF) != 0; };
 	static bool AllTrue(uint16_t tp) { return true; };
@@ -172,6 +174,7 @@ public:
 	int inTryCatch;
 	vector<string> AuxPath;
 	bool shutdown;
+	auxGraphicsBackend graphics_backend;
 	void InitBuiltInFunctions();
 	bool IsValidBuiltin(const string& funcname);
 	void InitErrorCodes();

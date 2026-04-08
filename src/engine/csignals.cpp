@@ -2950,8 +2950,8 @@ int CSignals::WriteAXL(FILE* fp)
 	return res;
 }
 
-bool CVar::IsGO() const
-{ //Is this Graphic Object?
+bool CVar::IsHandle() const
+{
 	if (fs == 3) return true;
 	if (strut.empty()) return false;
 	if (strut.find("type") == strut.end()) return false;
@@ -2964,6 +2964,11 @@ bool CVar::IsGO() const
 
 	// Add rejection for other handles (e.g., audio handle)
 	return true;
+}
+
+bool CVar::IsGO() const
+{ // Compatibility alias for legacy graphics-object checks.
+	return IsHandle();
 }
 
 CVar&  CVar::length()

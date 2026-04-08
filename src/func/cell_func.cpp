@@ -10,7 +10,7 @@ Cfunction set_builtin_function_cellstruct(fGate fp)
 	vector<string> desc_arg_req = { "struct_object", "prop_name"};
 	vector<string> desc_arg_opt = {  };
 	vector<CVar> default_arg = {  };
-	set<uint16_t> allowedTypes1 = { TYPEBIT_CELL, TYPEBIT_STRUT, TYPEBIT_STRUTS, }; // no more need because of qualify/reject
+	set<uint16_t> allowedTypes1 = { TYPEBIT_CELL, TYPEBIT_STRUT, TYPEBIT_HANDLE, }; // no more need because of qualify/reject
 	ft.allowed_arg_types.push_back(allowedTypes1);
 	set<uint16_t> allowedTypes2 = { TYPEBIT_STRING, TYPEBIT_STRING + 1, TYPEBIT_STRING + 2}; // no more need because of qualify/reject
 	ft.allowed_arg_types.push_back(allowedTypes2);

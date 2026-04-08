@@ -237,6 +237,15 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("istseq", objchecker);
 
 	SET_BUILTIN_FUNC("setnextchan", setnextchan);
+	SET_BUILTIN_FUNC("figure", figure);
+	SET_BUILTIN_FUNC("axes", axes);
+	SET_BUILTIN_FUNC("plot", plot);
+	SET_BUILTIN_FUNC("line", line);
+	SET_BUILTIN_FUNC("text", text);
+	SET_BUILTIN_FUNC("delete", delete);
+
+	SET_PSEUDO_VARS("gcf", gcf);
+	SET_PSEUDO_VARS("gca", gca);
 
 	SET_BUILTIN_FUNC("test", test);
 
@@ -676,4 +685,3 @@ void _clear(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	}
 	past->Sig.Reset();
 }
-

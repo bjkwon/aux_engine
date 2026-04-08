@@ -30,10 +30,10 @@ typedef double auxtype;
 
 typedef void (*fmodify) (auxtype*, uint64_t, void*, void*);
 
-// fs : 1 for non-temporal 
-//      0 for relative timemarks tseq 
+// fs : 1 for non-temporal
+//      0 for relative timemarks tseq
 //      2 for string
-//      3 for Handle array
+//      3 for handle array / reference object container
 //      4 for byte array
 //      or actual sampling rate
 
@@ -65,7 +65,7 @@ typedef void (*fmodify) (auxtype*, uint64_t, void*, void*);
 #define TYPEBIT_MULTICHANS	(uint16_t)0x0100
 #define TYPEBIT_CELL		(uint16_t)0x1000
 #define TYPEBIT_STRUT		(uint16_t)0x2000
-#define TYPEBIT_STRUTS		(uint16_t)0x4000
+#define TYPEBIT_HANDLE		(uint16_t)0x4000
 
 #define TYPEBIT_LOGICAL		TYPEBIT_SIZE1	
 // type & TYPEBIT_TEMPORAL ==> type | TYPEBIT_TEMPO_CHAINS_SNAP 
@@ -106,7 +106,8 @@ typedef void (*fmodify) (auxtype*, uint64_t, void*, void*);
 #define ISTEMPORALG(X)      (((X) & 0x000C) == TYPEBIT_TEMPO_ONE || ((X) & 0x000C) == TYPEBIT_TEMPO_CHAINS || ((X) & 0x000C) == TYPEBIT_TEMPO_CHAINS_SNAP)
 
 #define ISCELL(X)        ((X) & TYPEBIT_CELL)
-#define ISSTRUT(X)        ((X) & TYPEBIT_STRUT | (X) & TYPEBIT_STRUTS)
+#define ISSTRUT(X)        (((X) & TYPEBIT_STRUT) | ((X) & TYPEBIT_HANDLE))
+#define ISHANDLE(X)       (((X) & TYPEBIT_HANDLE) != 0)
 
 #define ALL_AUDIO_TYPES AUDIO_TYPES_1D, AUDIO_TYPES_2D
 
@@ -642,6 +643,7 @@ public:
 
 	bool operator < (const CVar & rhs) const;
 	bool IsStruct() const { return (!strut.empty() || !struts.empty()); }
+	bool IsHandle() const;
 	bool IsEmpty() const { return (!chain && !next && nSamples == 0 && cell.empty() && strut.empty() && struts.empty()); }
 	CVar& Reset(int fs2set = 0);
 	bool IsGO() const;
@@ -689,9 +691,9 @@ public:
 		else if (!strut.empty())
 		{
 			out += TYPEBIT_STRUT;
-			if (!struts.empty()) out += TYPEBIT_STRUTS;
+			if (!struts.empty()) out += TYPEBIT_HANDLE;
 		}
-		else if (fs == 3)		out += TYPEBIT_STRUT + TYPEBIT_STRUTS;
+		else if (fs == 3)		out += TYPEBIT_STRUT + TYPEBIT_HANDLE;
 		return out;
 	}
 };
