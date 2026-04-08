@@ -330,7 +330,59 @@ void _plot(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 
 void _line(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
-	throw_graphics_backend_error(past, pnode);
+	if (!past || !past->pEnv || !past->pEnv->graphics_backend.notify)
+		throw exception_etc(*past, pnode, "Graphics backend not available in this frontend.").raise();
+	if (!past->pEnv->graphics_backend.line)
+		throw exception_etc(*past, pnode, "The active graphics backend does not provide line() support yet.").raise();
+
+	if (args.empty() || args.size() > 3)
+		throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
+
+	uint64_t targetHandle = 0;
+	const CVar* xObj = nullptr;
+	const CVar* yObj = nullptr;
+
+	if (args.size() == 1) {
+		xObj = &args[0];
+	}
+	else if (args.size() == 2) {
+		if (ISSCALAR(args[0].type())) {
+			const double handleValue = args[0].value();
+			const double rounded = std::round(handleValue);
+			if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
+				throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
+			targetHandle = static_cast<uint64_t>(rounded);
+			xObj = &args[1];
+		}
+		else {
+			xObj = &args[0];
+			yObj = &args[1];
+		}
+	}
+	else {
+		if (!ISSCALAR(args[0].type()))
+			throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
+		const double handleValue = args[0].value();
+		const double rounded = std::round(handleValue);
+		if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
+			throw exception_etc(*past, pnode, "supported forms are line(x), line(x,y), line(h,x), and line(h,x,y).").raise();
+		targetHandle = static_cast<uint64_t>(rounded);
+		xObj = &args[1];
+		yObj = &args[2];
+	}
+
+	string err;
+	const uint64_t id = past->pEnv->graphics_backend.line(
+		past->pEnv->graphics_backend.userdata,
+		targetHandle,
+		reinterpret_cast<AuxObj>(xObj),
+		reinterpret_cast<AuxObj>(yObj),
+		err);
+	if (id == 0) {
+		if (err.empty()) err = "Failed to create line.";
+		throw exception_etc(*past, pnode, err).raise();
+	}
+	past->Sig.SetValue(static_cast<auxtype>(id));
 }
 
 void _text(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)

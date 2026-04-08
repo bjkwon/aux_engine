@@ -67,6 +67,7 @@ using auxGraphicsFigureFromHandleHook = uint64_t(*)(void* userdata, uint64_t han
 using auxGraphicsFigureAtPosHook = uint64_t(*)(void* userdata, const double pos[4], string& errstr);
 using auxGraphicsNamedFigureHook = uint64_t(*)(void* userdata, const char* source_name, string& errstr);
 using auxGraphicsPlotHook = uint64_t(*)(void* userdata, uint64_t target_handle_id, AuxObj object, const char* source_expr, const char* style_text, string& errstr);
+using auxGraphicsLineHook = uint64_t(*)(void* userdata, uint64_t target_handle_id, AuxObj x_object, AuxObj y_object, string& errstr);
 using auxGraphicsCreateAxesHook = uint64_t(*)(void* userdata, string& errstr);
 using auxGraphicsAxesFromHandleHook = uint64_t(*)(void* userdata, uint64_t handle_id, string& errstr);
 using auxGraphicsAxesAtPosHook = uint64_t(*)(void* userdata, const double pos[4], string& errstr);
@@ -90,6 +91,7 @@ struct auxGraphicsBackend {
     auxGraphicsFigureAtPosHook figure_at_pos = nullptr;
     auxGraphicsNamedFigureHook named_figure = nullptr;
     auxGraphicsPlotHook plot = nullptr;
+    auxGraphicsLineHook line = nullptr;
     auxGraphicsCreateAxesHook create_axes = nullptr;
     auxGraphicsAxesFromHandleHook axes_from_handle = nullptr;
     auxGraphicsAxesAtPosHook axes_at_pos = nullptr;
