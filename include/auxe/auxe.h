@@ -61,6 +61,12 @@ struct auxDebugInfo {
 
 using auxDebugHook = auxDebugAction(*)(const auxDebugInfo&);
 using auxGraphicsNotifyHook = int(*)(void* userdata, const struct auxGraphicsEvent& event, string& errstr);
+using auxGraphicsCurrentHandleHook = uint64_t(*)(void* userdata);
+using auxGraphicsCreateFigureHook = uint64_t(*)(void* userdata, string& errstr);
+using auxGraphicsCreateAxesHook = uint64_t(*)(void* userdata, string& errstr);
+using auxGraphicsAxesFromHandleHook = uint64_t(*)(void* userdata, uint64_t handle_id, string& errstr);
+using auxGraphicsAxesAtPosHook = uint64_t(*)(void* userdata, const double pos[4], string& errstr);
+using auxGraphicsDeleteHandleHook = int(*)(void* userdata, uint64_t handle_id, string& errstr);
 
 typedef double auxtype;
 
@@ -73,6 +79,13 @@ struct auxGraphicsEvent {
 struct auxGraphicsBackend {
     void* userdata = nullptr;
     auxGraphicsNotifyHook notify = nullptr;
+    auxGraphicsCurrentHandleHook current_figure = nullptr;
+    auxGraphicsCurrentHandleHook current_axes = nullptr;
+    auxGraphicsCreateFigureHook create_figure = nullptr;
+    auxGraphicsCreateAxesHook create_axes = nullptr;
+    auxGraphicsAxesFromHandleHook axes_from_handle = nullptr;
+    auxGraphicsAxesAtPosHook axes_at_pos = nullptr;
+    auxGraphicsDeleteHandleHook delete_handle = nullptr;
 };
 
 struct auxStruct {
