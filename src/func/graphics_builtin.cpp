@@ -10,6 +10,25 @@ const AstNode* first_arg_node(const AstNode* pnode)
 	return nullptr;
 }
 
+const AstNode* nth_arg_node(const AstNode* pnode, int index)
+{
+	if (index < 0 || !pnode || !pnode->alt) return nullptr;
+	const AstNode* node = nullptr;
+	if (pnode->alt->type == N_ARGS) node = pnode->alt->child;
+	else if (pnode->alt->type == N_HOOK) node = pnode->alt;
+	else return nullptr;
+	for (int i = 0; node && i < index; ++i)
+		node = node->next;
+	return node;
+}
+
+string simple_arg_source(const AstNode* node)
+{
+	if (!node || !node->str || !*node->str || node->child || node->alt)
+		return {};
+	return string(node->str);
+}
+
 Cfunction make_graphics_builtin(fGate fp,
                                 const vector<string>& desc_arg_req,
                                 const vector<string>& desc_arg_opt)
@@ -88,18 +107,89 @@ void _figure(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	if (!past || !past->pEnv || !past->pEnv->graphics_backend.notify)
 		throw exception_etc(*past, pnode, "Graphics backend not available in this frontend.").raise();
-	if (!args.empty())
-		throw exception_etc(*past, pnode, "Only figure() without arguments has migrated to auxe so far.").raise();
-	if (!past->pEnv->graphics_backend.create_figure)
-		throw exception_etc(*past, pnode, "The active graphics backend does not provide figure creation yet.").raise();
-
 	string err;
-	const uint64_t id = past->pEnv->graphics_backend.create_figure(past->pEnv->graphics_backend.userdata, err);
-	if (id == 0) {
-		if (err.empty()) err = "Failed to create figure.";
-		throw exception_etc(*past, pnode, err).raise();
+
+	if (args.empty()) {
+		if (!past->pEnv->graphics_backend.create_figure)
+			throw exception_etc(*past, pnode, "The active graphics backend does not provide figure creation yet.").raise();
+
+		const uint64_t id = past->pEnv->graphics_backend.create_figure(past->pEnv->graphics_backend.userdata, err);
+		if (id == 0) {
+			if (err.empty()) err = "Failed to create figure.";
+			throw exception_etc(*past, pnode, err).raise();
+		}
+		past->Sig.SetValue(static_cast<auxtype>(id));
+		return;
 	}
-	past->Sig.SetValue(static_cast<auxtype>(id));
+
+	if (args.size() != 1)
+		throw exception_etc(*past, pnode, "figure() requires a handle, position, or source name.").raise();
+
+	const CVar& arg = args.front();
+	const uint16_t tp = arg.type();
+
+	if (ISSCALAR(tp)) {
+		if (!past->pEnv->graphics_backend.figure_from_handle)
+			throw exception_etc(*past, pnode, "The active graphics backend does not provide figure(handle) support yet.").raise();
+
+		const double handleValue = arg.value();
+		const double rounded = std::round(handleValue);
+		if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
+			throw exception_etc(*past, pnode, "invalid figure argument").raise();
+
+		const uint64_t id = past->pEnv->graphics_backend.figure_from_handle(
+			past->pEnv->graphics_backend.userdata,
+			static_cast<uint64_t>(rounded),
+			err);
+		if (id == 0) {
+			if (err.empty()) err = "Failed to resolve figure(handle).";
+			throw exception_etc(*past, pnode, err).raise();
+		}
+		past->Sig.SetValue(static_cast<auxtype>(id));
+		return;
+	}
+
+	if (ISVECTOR(tp) && !ISSTRING(tp) && !ISAUDIO(tp) && arg.nSamples == 4) {
+		if (!past->pEnv->graphics_backend.figure_at_pos)
+			throw exception_etc(*past, pnode, "The active graphics backend does not provide figure(pos) support yet.").raise();
+
+		const vector<auxtype> posVec = arg.ToVector();
+		if (posVec.size() != 4)
+			throw exception_etc(*past, pnode, "figure() requires a 4-element position vector.").raise();
+		double pos[4] = { posVec[0], posVec[1], posVec[2], posVec[3] };
+		const uint64_t id = past->pEnv->graphics_backend.figure_at_pos(
+			past->pEnv->graphics_backend.userdata,
+			pos,
+			err);
+		if (id == 0) {
+			if (err.empty()) err = "Failed to create figure.";
+			throw exception_etc(*past, pnode, err).raise();
+		}
+		past->Sig.SetValue(static_cast<auxtype>(id));
+		return;
+	}
+
+	if (ISSTRING(tp)) {
+		if (!past->pEnv->graphics_backend.named_figure)
+			throw exception_etc(*past, pnode, "The active graphics backend does not provide figure(name) support yet.").raise();
+
+		const string sourceName = arg.str();
+		if (sourceName.empty())
+			throw exception_etc(*past, pnode, "figure() requires a non-empty source name.").raise();
+
+		const uint64_t id = past->pEnv->graphics_backend.named_figure(
+			past->pEnv->graphics_backend.userdata,
+			sourceName.c_str(),
+			err);
+		if (id == 0) {
+			if (err.empty()) err = "Failed to create named figure.";
+			throw exception_etc(*past, pnode, err).raise();
+		}
+		past->Sig.SetValue(static_cast<auxtype>(id));
+		return;
+	}
+
+	throw exception_etc(*past, pnode, "figure() requires a handle, position, or source name.").raise();
 }
 
 void _axes(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
@@ -173,7 +263,69 @@ void _axes(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 
 void _plot(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
-	throw_graphics_backend_error(past, pnode);
+	if (!past || !past->pEnv || !past->pEnv->graphics_backend.notify)
+		throw exception_etc(*past, pnode, "Graphics backend not available in this frontend.").raise();
+	if (!past->pEnv->graphics_backend.plot)
+		throw exception_etc(*past, pnode, "The active graphics backend does not provide plot() support yet.").raise();
+
+	if (args.empty() || args.size() > 3)
+		throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
+
+	const CVar* plotObj = nullptr;
+	uint64_t targetHandle = 0;
+	string styleText;
+	int plotArgIndex = 0;
+
+	if (args.size() == 1) {
+		plotObj = &args[0];
+		plotArgIndex = 0;
+	}
+	else if (args.size() == 2) {
+		if (ISSTRING(args[1].type())) {
+			plotObj = &args[0];
+			styleText = args[1].str();
+			plotArgIndex = 0;
+		}
+		else if (ISSCALAR(args[0].type())) {
+			const double handleValue = args[0].value();
+			const double rounded = std::round(handleValue);
+			if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
+				throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
+			targetHandle = static_cast<uint64_t>(rounded);
+			plotObj = &args[1];
+			plotArgIndex = 1;
+		}
+		else {
+			throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
+		}
+	}
+	else {
+		if (!ISSCALAR(args[0].type()) || !ISSTRING(args[2].type()))
+			throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
+		const double handleValue = args[0].value();
+		const double rounded = std::round(handleValue);
+		if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
+			throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
+		targetHandle = static_cast<uint64_t>(rounded);
+		plotObj = &args[1];
+		styleText = args[2].str();
+		plotArgIndex = 1;
+	}
+
+	string sourceExpr = simple_arg_source(nth_arg_node(pnode, plotArgIndex));
+	string err;
+	const uint64_t id = past->pEnv->graphics_backend.plot(
+		past->pEnv->graphics_backend.userdata,
+		targetHandle,
+		reinterpret_cast<AuxObj>(plotObj),
+		sourceExpr.empty() ? nullptr : sourceExpr.c_str(),
+		styleText.empty() ? nullptr : styleText.c_str(),
+		err);
+	if (id == 0) {
+		if (err.empty()) err = "Failed to create plot.";
+		throw exception_etc(*past, pnode, err).raise();
+	}
+	past->Sig.SetValue(static_cast<auxtype>(id));
 }
 
 void _line(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
