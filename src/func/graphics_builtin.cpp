@@ -275,31 +275,35 @@ void _plot(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	if (!past->pEnv->graphics_backend.plot)
 		throw exception_etc(*past, pnode, "The active graphics backend does not provide plot() support yet.").raise();
 
-	if (args.empty() || args.size() > 3)
+	int actualCount = 0;
+	for (const AstNode* an = first_arg_node(pnode); an; an = an->next)
+		++actualCount;
+	if (actualCount <= 0 || actualCount > 3 || args.size() < static_cast<size_t>(actualCount))
 		throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
 
 	const CVar* plotObj = nullptr;
 	uint64_t targetHandle = 0;
 	string styleText;
 	int plotArgIndex = 0;
+	const CVar* firstActual = &past->Sig;
 
-	if (args.size() == 1) {
-		plotObj = &args[0];
+	if (actualCount == 1) {
+		plotObj = firstActual;
 		plotArgIndex = 0;
 	}
-	else if (args.size() == 2) {
-		if (ISSTRING(args[1].type())) {
-			plotObj = &args[0];
-			styleText = args[1].str();
+	else if (actualCount == 2) {
+		if (ISSTRING(args[0].type())) {
+			plotObj = firstActual;
+			styleText = args[0].str();
 			plotArgIndex = 0;
 		}
-		else if (ISSCALAR(args[0].type())) {
-			const double handleValue = args[0].value();
+		else if (ISSCALAR(firstActual->type())) {
+			const double handleValue = firstActual->value();
 			const double rounded = std::round(handleValue);
 			if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
 				throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
 			targetHandle = static_cast<uint64_t>(rounded);
-			plotObj = &args[1];
+			plotObj = &args[0];
 			plotArgIndex = 1;
 		}
 		else {
@@ -307,15 +311,15 @@ void _plot(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		}
 	}
 	else {
-		if (!ISSCALAR(args[0].type()) || !ISSTRING(args[2].type()))
+		if (!ISSCALAR(firstActual->type()) || !ISSTRING(args[1].type()))
 			throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
-		const double handleValue = args[0].value();
+		const double handleValue = firstActual->value();
 		const double rounded = std::round(handleValue);
 		if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
 			throw exception_etc(*past, pnode, "currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\").").raise();
 		targetHandle = static_cast<uint64_t>(rounded);
-		plotObj = &args[1];
-		styleText = args[2].str();
+		plotObj = &args[0];
+		styleText = args[1].str();
 		plotArgIndex = 1;
 	}
 

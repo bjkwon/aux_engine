@@ -335,6 +335,14 @@ static std::string format_non_audio_size(const CVar* v)
     const uint16_t t = v->type();
     if (ISNULL(t)) return "0";
 
+    if ((t & TYPEBIT_HANDLE) != 0) {
+        const uint64_t len = v->Len();
+        if (v->nGroups > 1) {
+            return std::to_string(v->nGroups) + "x" + std::to_string(len);
+        }
+        return std::to_string(len);
+    }
+
     if (ISCELL(t)) {
         return std::to_string(v->cell.size());
     }
@@ -400,6 +408,39 @@ static std::string truncate_text(const std::string& s, int limit)
     if (limit <= 0) return s;
     if (static_cast<int>(s.size()) <= limit) return s;
     return s.substr(0, static_cast<size_t>(limit)) + "...";
+}
+
+static std::string format_handle_preview(const CVar* v, int display_precision)
+{
+    if (!v) return {};
+
+    std::ostringstream oss;
+    oss.unsetf(std::ios::floatfield);
+    oss.precision(display_precision);
+    if (v->nGroups > 1) {
+        oss << "[";
+        for (uint64_t group = 0; group < v->nGroups; ++group) {
+            if (group > 0) oss << "; ";
+            for (uint64_t i = 0; i < v->Len(); ++i) {
+                if (i > 0) oss << " ";
+                oss << v->buf[group * v->Len() + i];
+            }
+        }
+        oss << "]";
+        return oss.str();
+    }
+
+    if (v->nSamples <= 1) {
+        return v->valuestr(display_precision);
+    }
+
+    oss << "[";
+    for (uint64_t i = 0; i < v->nSamples; ++i) {
+        if (i > 0) oss << " ";
+        oss << v->buf[i];
+    }
+    oss << "]";
+    return oss.str();
 }
 
 // ===== Implementations of public API =====
@@ -632,6 +673,65 @@ AuxObj aux_get_var(auxContext* ctx, const string& varname)
     return reinterpret_cast<AuxObj>(jt->second.front());
 }
 
+int aux_set_handle_values(auxContext* ctx, const string& varname, const vector<uint64_t>& ids)
+{
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!frame || varname.empty()) return -1;
+
+    CVar out;
+    out.Reset(1);
+    if (!ids.empty()) {
+        if (ids.size() == 1) {
+            out.SetValue(static_cast<auxtype>(ids.front()));
+        } else {
+            out.UpdateBuffer(static_cast<unsigned int>(ids.size()));
+            for (size_t i = 0; i < ids.size(); ++i)
+                out.buf[i] = static_cast<auxtype>(ids[i]);
+        }
+        out.MarkHandle(true);
+    }
+    frame->Vars[varname] = out;
+    return 0;
+}
+
+namespace {
+bool update_runtime_handle_members_recursive(CVar& value, uint64_t handle_id, const map<string, double>& members)
+{
+    bool updated = false;
+    if (value.IsRuntimeHandle() && ISSCALARG(value.type())) {
+        const double rounded = std::round(value.value());
+        if (rounded > 0 && std::fabs(value.value() - rounded) < 1e-9 &&
+            static_cast<uint64_t>(rounded) == handle_id) {
+            for (const auto& entry : members) {
+                CVar memberValue;
+                memberValue.SetValue(static_cast<auxtype>(entry.second));
+                value.strut[entry.first] = memberValue;
+            }
+            updated = true;
+        }
+    }
+    for (auto& entry : value.strut) {
+        updated = update_runtime_handle_members_recursive(entry.second, handle_id, members) || updated;
+    }
+    for (auto& entry : value.cell) {
+        updated = update_runtime_handle_members_recursive(entry, handle_id, members) || updated;
+    }
+    return updated;
+}
+} // namespace
+
+int aux_update_runtime_handle_members(auxContext* ctx, uint64_t handle_id, const map<string, double>& members)
+{
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!frame || handle_id == 0 || members.empty()) return -1;
+
+    bool updated = false;
+    for (auto& entry : frame->Vars) {
+        updated = update_runtime_handle_members_recursive(entry.second, handle_id, members) || updated;
+    }
+    return updated ? 0 : 1;
+}
+
 vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname)
 {
     vector<AuxObj> out;
@@ -703,8 +803,8 @@ int aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uin
         } else {
             const CVar* cv = asCVar(v);
             if ((type & TYPEBIT_HANDLE) != 0) {
-                size = "1";
-                preview = cv->valuestr(cfg.display_precision);
+                size = format_non_audio_size(cv);
+                preview = format_handle_preview(cv, cfg.display_precision);
             } else {
                 size = format_non_audio_size(cv);
                 if ((type & 0xFFF0) == TYPEBIT_STRING) {
@@ -996,6 +1096,35 @@ int aux_install_graphics_backend(auxContext* ctx, const auxGraphicsBackend& back
     }
     frame->pEnv->graphics_backend = backend;
     return 0;
+}
+
+int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBackend& backend)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return 1;
+    }
+    if (!backend.start) {
+        return 1;
+    }
+    frame->pEnv->playback_backend = backend;
+    return 0;
+}
+
+int aux_clear_playback_backend(auxContext* ctx)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return 1;
+    }
+    frame->pEnv->playback_backend = auxPlaybackBackend{};
+    return 0;
+}
+
+bool aux_has_playback_backend(auxContext* ctx)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    return ctx && frame->pEnv && frame->pEnv->playback_backend.start != nullptr;
 }
 
 int aux_clear_graphics_backend(auxContext* ctx)

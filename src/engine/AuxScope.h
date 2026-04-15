@@ -175,6 +175,7 @@ public:
 	vector<string> AuxPath;
 	bool shutdown;
 	auxGraphicsBackend graphics_backend;
+	auxPlaybackBackend playback_backend;
 	void InitBuiltInFunctions();
 	bool IsValidBuiltin(const string& funcname);
 	void InitErrorCodes();

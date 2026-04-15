@@ -53,6 +53,12 @@ enum class auxGraphicsEventKind {
     AUX_GRAPHICS_NAMED_PLOT_SOURCE_UPDATED
 };
 
+enum class auxPlaybackCommand {
+    AUX_PLAYBACK_STOP = 0,
+    AUX_PLAYBACK_PAUSE,
+    AUX_PLAYBACK_RESUME
+};
+
 struct auxDebugInfo {
     auxContext** ctx;   // current context / frame
     string filename;
@@ -72,6 +78,8 @@ using auxGraphicsCreateAxesHook = uint64_t(*)(void* userdata, string& errstr);
 using auxGraphicsAxesFromHandleHook = uint64_t(*)(void* userdata, uint64_t handle_id, string& errstr);
 using auxGraphicsAxesAtPosHook = uint64_t(*)(void* userdata, const double pos[4], string& errstr);
 using auxGraphicsDeleteHandleHook = int(*)(void* userdata, uint64_t handle_id, string& errstr);
+using auxPlaybackStartHook = int(*)(void* userdata, uint64_t handle_id, AuxObj object, int repeat_count, int reuse_existing_handle, string& errstr);
+using auxPlaybackControlHook = int(*)(void* userdata, uint64_t handle_id, auxPlaybackCommand command, string& errstr);
 
 typedef double auxtype;
 
@@ -96,6 +104,12 @@ struct auxGraphicsBackend {
     auxGraphicsAxesFromHandleHook axes_from_handle = nullptr;
     auxGraphicsAxesAtPosHook axes_at_pos = nullptr;
     auxGraphicsDeleteHandleHook delete_handle = nullptr;
+};
+
+struct auxPlaybackBackend {
+    void* userdata = nullptr;
+    auxPlaybackStartHook start = nullptr;
+    auxPlaybackControlHook control = nullptr;
 };
 
 struct auxStruct {
@@ -150,6 +164,7 @@ AUXE_API size_t      aux_flatten_channel(const AuxObj& v, int channel_index, aux
 AUXE_API bool        aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sample, int num_timeline_samples, int offset_samples, vector<double>& out_db);
 AUXE_API int         aux_get_vars(auxContext* ctx, vector<string>& vars);
 AUXE_API AuxObj      aux_get_var(auxContext* ctx, const string& varname);
+AUXE_API int         aux_set_handle_values(auxContext* ctx, const string& varname, const vector<uint64_t>& ids);
 AUXE_API vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname);
 AUXE_API map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname);
 AUXE_API int        aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uint16_t& type, string& size, string& preview);
@@ -179,6 +194,11 @@ AUXE_API int aux_install_graphics_backend(auxContext* ctx, const auxGraphicsBack
 AUXE_API int aux_clear_graphics_backend(auxContext* ctx);
 AUXE_API bool aux_has_graphics_backend(auxContext* ctx);
 AUXE_API int aux_graphics_notify(auxContext* ctx, const auxGraphicsEvent& event, string& errstr);
+
+AUXE_API int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBackend& backend);
+AUXE_API int aux_clear_playback_backend(auxContext* ctx);
+AUXE_API bool aux_has_playback_backend(auxContext* ctx);
+AUXE_API int aux_update_runtime_handle_members(auxContext* ctx, uint64_t handle_id, const map<string, double>& members);
 
 // Optional: query where we are paused
 AUXE_API int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out);

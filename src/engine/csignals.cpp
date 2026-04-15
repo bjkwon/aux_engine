@@ -3030,6 +3030,18 @@ CVar& CVar::Reset(int fs2set)
 	return *this;
 }
 
+void CVar::SetValue(auxtype v)
+{
+	Reset(1);
+	body::SetValue(v);
+}
+
+void CVar::SetValue(complex<auxtype> v)
+{
+	Reset(1);
+	body::SetValue(v);
+}
+
 void CVar::set_class_head(const CSignals & rhs)
 {
 	CSignals::operator=(rhs);

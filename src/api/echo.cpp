@@ -112,6 +112,17 @@ string echo_object::make(const CTimeSeries& sig, bool unit, int offset)
 string echo_struct::print(const CVar& obj, const string& head)
 {
 	string out = "[Structure] ...\n";
+	const uint16_t type = obj.type();
+	const uint16_t surfaceType = type & static_cast<uint16_t>(~(TYPEBIT_STRUT | TYPEBIT_HANDLE | TYPEBIT_CELL));
+	if ((type & TYPEBIT_HANDLE) == 0 && surfaceType != 0)
+	{
+		CVar face = obj;
+		face.cell.clear();
+		face.strut.clear();
+		face.struts.clear();
+		out += "{face}";
+		out += echo_object::print(face, offset + 1);
+	}
 	for (map<string, CVar>::const_iterator it = obj.strut.begin(); it != obj.strut.end(); it++)
 	{
 		ostringstream var0;
@@ -145,8 +156,6 @@ string echo_object::row(const CTimeSeries& obj, unsigned int id0, int offset, in
 	out.precision(prec);
 	unsigned int k = 0;
 	vector<int> idx;
-	out << tbht;
-	cout << out.str() << endl;
 	const int L = static_cast<int>(obj.Len());
 	const int limX = (display_limit_x > 0) ? display_limit_x : 10;
 	idx.reserve(static_cast<size_t>(max(0, L)));
@@ -236,12 +245,12 @@ string echo_object::print_vector(const CTimeSeries& obj, int offset)
 		ss << "... ";
 	}
 	if (obj.nGroups == 1) {
-		if (obj.IsLogical()) cout << "(bool) ";
+		if (obj.IsLogical()) ss << "(bool) ";
 		ss << row(obj, 0, 0, precision);
 	}
 	else
 	{
-		if (obj.IsLogical()) cout << "(bool) ";
+		if (obj.IsLogical()) ss << "(bool) ";
 		ss << endl;
 		for (auto k : idx)
 			ss << row(obj, obj.Len() * k, offset + 1, precision);

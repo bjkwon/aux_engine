@@ -650,6 +650,8 @@ public:
 	bool IsGO() const;
 	void MarkHandle(bool enabled = true) { runtimeHandle = enabled; }
 	bool IsRuntimeHandle() const { return runtimeHandle; }
+	void SetValue(auxtype v);
+	void SetValue(complex<auxtype> v);
 
 	CSignals evoke_getsig2(CSignal(*fp) (auxtype*, unsigned int, void*, void*), void* popt1 = NULL, void* popt = NULL);
 
