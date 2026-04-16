@@ -12,6 +12,14 @@
 
 using json = nlohmann::json;
 
+#ifdef _WIN32
+#define AUX_POPEN _popen
+#define AUX_PCLOSE _pclose
+#else
+#define AUX_POPEN popen
+#define AUX_PCLOSE pclose
+#endif
+
 // awst(x, v): Upload audio x to S3, start Amazon Transcribe job, return struct with job info.
 // Struct v members:
 //   .region   string  S3/Transcribe region (default "us-east-1")
@@ -21,8 +29,19 @@ using json = nlohmann::json;
 //   .basename  string Optional prefix for job name (default "auxlab")
 //   .id        string Optional custom job prefix; if text and len<=32 use id_timestamp, else first 32 chars
 
-static string shell_quote_posix(const string& s)
+static string shell_quote_cli(const string& s)
 {
+#ifdef _WIN32
+	string out("\"");
+	for (char c : s) {
+		if (c == '"')
+			out += "\\\"";
+		else
+			out += c;
+	}
+	out += "\"";
+	return out;
+#else
 	string out("'");
 	for (char c : s) {
 		if (c == '\'')
@@ -32,6 +51,7 @@ static string shell_quote_posix(const string& s)
 	}
 	out += "'";
 	return out;
+#endif
 }
 
 static bool run_aws_cmd(const string& cmd, string& errstr)
@@ -57,7 +77,7 @@ static bool run_aws_cmd_capture(const string& cmd, string& output, string& errst
 #else
 	string fullCmd = cmd + " 2>nul";
 #endif
-	FILE* fp = popen(fullCmd.c_str(), "r");
+	FILE* fp = AUX_POPEN(fullCmd.c_str(), "r");
 	if (!fp) {
 		errstr = "popen failed";
 		return false;
@@ -66,7 +86,7 @@ static bool run_aws_cmd_capture(const string& cmd, string& output, string& errst
 	char buf[4096];
 	while (fgets(buf, sizeof(buf), fp))
 		output += buf;
-	int rc = pclose(fp);
+	int rc = AUX_PCLOSE(fp);
 	if (rc != 0) {
 		errstr = "aws command failed (exit " + std::to_string(rc) + ")";
 		return false;
@@ -104,9 +124,9 @@ static void json_obj_to_cvar(CVar& out, const json& j)
 
 static bool upload_to_s3(const string& localPath, const string& bucket, const string& key, string& errstr)
 {
-	string qLocal = shell_quote_posix(localPath);
+	string qLocal = shell_quote_cli(localPath);
 	string s3Uri = "s3://" + bucket + "/" + key;
-	string qS3 = shell_quote_posix(s3Uri);
+	string qS3 = shell_quote_cli(s3Uri);
 	string cmd = "aws s3 cp " + qLocal + " " + qS3;
 	return run_aws_cmd(cmd, errstr);
 }
@@ -265,18 +285,18 @@ void _awst(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	outJsonKey += jobname + ".json";  // use jobname (not basename) so each job has unique transcript
 
 	string transcribeCmd = "aws transcribe start-transcription-job "
-		"--region " + shell_quote_posix(region) + " "
-		"--transcription-job-name " + shell_quote_posix(jobname) + " "
-		"--media MediaFileUri=" + shell_quote_posix(mediaUri) + " "
+		"--region " + shell_quote_cli(region) + " "
+		"--transcription-job-name " + shell_quote_cli(jobname) + " "
+		"--media MediaFileUri=" + shell_quote_cli(mediaUri) + " "
 		"--media-format wav "
-		"--output-bucket-name " + shell_quote_posix(bucket) + " "
-		"--output-key " + shell_quote_posix(outJsonKey);
+		"--output-bucket-name " + shell_quote_cli(bucket) + " "
+		"--output-key " + shell_quote_cli(outJsonKey);
 
 	// Language identification: 0=single-id, 1=manual, 2+=multi-id
 	if (langCodes.empty()) {
 		transcribeCmd += " --identify-language";
 	} else if (langCodes.size() == 1) {
-		transcribeCmd += " --language-code " + shell_quote_posix(langCodes[0]);
+		transcribeCmd += " --language-code " + shell_quote_cli(langCodes[0]);
 	} else {
 		transcribeCmd += " --identify-multiple-languages";
 		string lo;
@@ -284,7 +304,7 @@ void _awst(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			if (i > 0) lo += ",";
 			lo += "LanguageCode=" + langCodes[i];
 		}
-		transcribeCmd += " --language-options " + shell_quote_posix(lo);
+		transcribeCmd += " --language-options " + shell_quote_cli(lo);
 	}
 	transcribeCmd += " --settings ChannelIdentification=true";
 
