@@ -292,6 +292,14 @@ void _stop_pause_resume(AuxScope* past, const AstNode* pnode, const vector<CVar>
 		static_cast<uint64_t>(rounded),
 		command,
 		err);
+	if (ok != 0) {
+		past->Sig = *handle_arg;
+		if (command == auxPlaybackCommand::AUX_PLAYBACK_STOP) {
+			set_playback_member(past->Sig, "repeat_left", 0.0);
+			set_playback_member(past->Sig, "prog", 100.0);
+		}
+		return;
+	}
 	past->Sig.Reset(1);
-	past->Sig.SetValue(ok != 0 ? 1.0 : -1.0);
+	past->Sig.SetValue(-1.0);
 }
