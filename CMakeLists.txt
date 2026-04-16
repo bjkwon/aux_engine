@@ -93,6 +93,7 @@ target_include_directories(auxe
 # -----------------------------
 if(MSVC)
   target_compile_definitions(auxe PRIVATE _HAS_STD_BYTE=0)
+  target_compile_definitions(auxe PRIVATE YY_NO_UNISTD_H=1)
 endif()
 
 if(MSVC)

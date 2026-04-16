@@ -1082,7 +1082,7 @@ AsyncAssignTag *gAsyncAssignHead = NULL, *gAsyncAssignTail = NULL;
 #define BRACE 5
 #define TSEQ 6
 
-#ifndef YY_NO_UNISTD_H
+#if !defined(YY_NO_UNISTD_H) && !defined(_WIN32)
 /* Special case for "unistd.h", since it is non-ANSI. We include it way
  * down here because we want the user's section 1 to have been scanned first.
  * The user has a chance to override it with an option.
@@ -2921,4 +2921,3 @@ int consumeAsyncAssignMarker(int line, int col)
 	}
 	return 0;
 }
-

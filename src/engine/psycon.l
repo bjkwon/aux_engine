@@ -19,6 +19,9 @@ yy_top_state() shouldn't be assumed to be PARENTH
 
 /* scanner for Psycon syntax parser */
 %{
+#ifdef _WIN32
+#define YY_NO_UNISTD_H 1
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include "psycon.yacc.h"
