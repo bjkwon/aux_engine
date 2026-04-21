@@ -59,6 +59,12 @@ enum class auxPlaybackCommand {
     AUX_PLAYBACK_RESUME
 };
 
+enum class auxRecordCommand {
+    AUX_RECORD_STOP = 0,
+    AUX_RECORD_PAUSE,
+    AUX_RECORD_RESUME
+};
+
 struct auxDebugInfo {
     auxContext** ctx;   // current context / frame
     string filename;
@@ -78,8 +84,31 @@ using auxGraphicsCreateAxesHook = uint64_t(*)(void* userdata, string& errstr);
 using auxGraphicsAxesFromHandleHook = uint64_t(*)(void* userdata, uint64_t handle_id, string& errstr);
 using auxGraphicsAxesAtPosHook = uint64_t(*)(void* userdata, const double pos[4], string& errstr);
 using auxGraphicsDeleteHandleHook = int(*)(void* userdata, uint64_t handle_id, string& errstr);
+using auxGraphicsRepaintHandleHook = int(*)(void* userdata, uint64_t handle_id, string& errstr);
 using auxPlaybackStartHook = int(*)(void* userdata, uint64_t handle_id, AuxObj object, int repeat_count, int reuse_existing_handle, string& errstr);
 using auxPlaybackControlHook = int(*)(void* userdata, uint64_t handle_id, auxPlaybackCommand command, string& errstr);
+struct auxRecordResult {
+    int sample_rate = 0;
+    int num_channels = 0;
+    vector<double> interleaved;
+};
+using auxRecordHook = int(*)(void* userdata, int device_id, int sample_rate, int num_channels, double duration_ms, auxRecordResult& result, string& errstr);
+struct auxAsyncRecordSpec {
+    int device_id = 0;
+    int sample_rate = 0;
+    int num_channels = 1;
+    double duration_ms = -1.0;
+    double block_ms = 100.0;
+    string callback_name;
+};
+struct auxRecordCallbackPayload {
+    int sample_rate = 0;
+    int num_channels = 1;
+    int callback_index = 0;
+    vector<double> interleaved;
+};
+using auxAsyncRecordStartHook = int(*)(void* userdata, uint64_t handle_id, const auxAsyncRecordSpec& spec, string& errstr);
+using auxAsyncRecordControlHook = int(*)(void* userdata, uint64_t handle_id, auxRecordCommand command, string& errstr);
 
 typedef double auxtype;
 
@@ -104,12 +133,16 @@ struct auxGraphicsBackend {
     auxGraphicsAxesFromHandleHook axes_from_handle = nullptr;
     auxGraphicsAxesAtPosHook axes_at_pos = nullptr;
     auxGraphicsDeleteHandleHook delete_handle = nullptr;
+    auxGraphicsRepaintHandleHook repaint_handle = nullptr;
 };
 
 struct auxPlaybackBackend {
     void* userdata = nullptr;
     auxPlaybackStartHook start = nullptr;
     auxPlaybackControlHook control = nullptr;
+    auxRecordHook record = nullptr;
+    auxAsyncRecordStartHook record_async_start = nullptr;
+    auxAsyncRecordControlHook record_async_control = nullptr;
 };
 
 struct auxStruct {
@@ -199,6 +232,8 @@ AUXE_API int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBack
 AUXE_API int aux_clear_playback_backend(auxContext* ctx);
 AUXE_API bool aux_has_playback_backend(auxContext* ctx);
 AUXE_API int aux_update_runtime_handle_members(auxContext* ctx, uint64_t handle_id, const map<string, double>& members);
+AUXE_API int aux_invoke_record_callback(auxContext** ctx, uint64_t session_id, const string& callback_name, const auxRecordCallbackPayload& payload, const auxConfig& cfg, string& preview_or_error);
+AUXE_API int aux_attach_record_callback_outputs_to_handle(auxContext* ctx, uint64_t session_id, uint64_t handle_id);
 
 // Optional: query where we are paused
 AUXE_API int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out);

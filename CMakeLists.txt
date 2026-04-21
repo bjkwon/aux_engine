@@ -244,4 +244,26 @@ if(AUXE_BUILD_TESTS)
     NAME auxe_regression_debug_resume
     COMMAND auxe_regression_debug_resume
   )
+
+  add_executable(auxe_regression_record_callback
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_record_callback.cpp
+  )
+  target_link_libraries(auxe_regression_record_callback PRIVATE auxe)
+  target_include_directories(auxe_regression_record_callback PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  add_test(
+    NAME auxe_regression_record_callback
+    COMMAND auxe_regression_record_callback
+  )
+
+  add_executable(auxe_regression_graphics_nogui
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_graphics_nogui.cpp
+  )
+  target_link_libraries(auxe_regression_graphics_nogui PRIVATE auxe)
+  target_include_directories(auxe_regression_graphics_nogui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  add_test(
+    NAME auxe_regression_graphics_nogui
+    COMMAND auxe_regression_graphics_nogui
+  )
 endif()

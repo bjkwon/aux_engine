@@ -708,6 +708,14 @@ static AstNode* get_next_parsible_node(AstNode* pn)
 	return pn->alt;
 }
 
+static bool is_async_record_callback_suffix(const AstNode* pn)
+{
+	if (!pn) return false;
+	if (pn->type != N_STRUCT) return false;
+	if (!pn->str || strcmp(pn->str, "record") != 0) return false;
+	return pn->alt && pn->alt->type == N_STRUCT;
+}
+
 bool AuxScope::IsConditional(const AstNode* pnode)
 {
 	if (!pnode) return false;
@@ -950,6 +958,8 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 		{
 			if (ptree->alt->type == N_ARGS || ptree->alt->type == N_HOOK)
 				ptree = ptree->alt; // to skip N_ARGS
+			else if (is_async_record_callback_suffix(ptree))
+				ptree = ptree->alt; // record(...).callback is fully consumed by the builtin
 		}
 	}
 	else if (ptree->type == N_ARGS)

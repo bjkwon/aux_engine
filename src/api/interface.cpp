@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <sstream>
 #include <cmath>
+#include <atomic>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
 #include <auxe/auxe.h>
@@ -37,6 +38,54 @@ static inline const CVar* asCVar(AuxObj h) {
 
 static inline const CSignals* asCSignals(AuxObj h) {
     return reinterpret_cast<const CSignals*>(h);
+}
+
+static CVar make_audio_cvar_from_payload(const auxRecordCallbackPayload& payload)
+{
+    CVar out;
+    out.Reset(std::max(payload.sample_rate, 0));
+    if (payload.num_channels < 1 || payload.num_channels > 2)
+        return out;
+    if (payload.interleaved.empty())
+        return out;
+    if (payload.interleaved.size() % static_cast<size_t>(payload.num_channels) != 0)
+        return out;
+
+    const size_t frames = payload.interleaved.size() / static_cast<size_t>(payload.num_channels);
+    out.UpdateBuffer(static_cast<unsigned int>(frames));
+    if (payload.num_channels == 1) {
+        for (size_t i = 0; i < frames; ++i)
+            out.buf[i] = payload.interleaved[i];
+        return out;
+    }
+
+    CSignals right(payload.sample_rate);
+    right.UpdateBuffer(static_cast<unsigned int>(frames));
+    for (size_t i = 0; i < frames; ++i) {
+        out.buf[i] = payload.interleaved[i * 2];
+        right.buf[i] = payload.interleaved[i * 2 + 1];
+    }
+    out.SetNextChan(right);
+    return out;
+}
+
+struct RecordCallbackSessionState {
+    string callback_name;
+    AstNode* callback_func = nullptr;
+    CVar input_state;
+    vector<string> output_names;
+    vector<CVar> output_states;
+};
+
+static map<AuxScope*, map<uint64_t, RecordCallbackSessionState>> g_record_callback_sessions;
+
+static bool is_reserved_record_handle_member_name(const string& name)
+{
+    static const set<string> reserved = {
+        "type", "id", "devID", "fs", "channels", "dur", "block",
+        "durRec", "durLeft", "prog", "active", "paused"
+    };
+    return reserved.find(name) != reserved.end();
 }
 
 // Defined in src/func/fft.cpp
@@ -678,11 +727,41 @@ int aux_set_handle_values(auxContext* ctx, const string& varname, const vector<u
     auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame || varname.empty()) return -1;
 
+    std::function<const CVar*(const CVar&, uint64_t)> find_handle_recursive =
+        [&](const CVar& value, uint64_t handle_id) -> const CVar* {
+        if (value.IsRuntimeHandle() && ISSCALARG(value.type())) {
+            const double rounded = std::round(value.value());
+            if (rounded > 0 && std::fabs(value.value() - rounded) < 1e-9 &&
+                static_cast<uint64_t>(rounded) == handle_id) {
+                return &value;
+            }
+        }
+        for (const auto& entry : value.strut) {
+            if (const CVar* found = find_handle_recursive(entry.second, handle_id))
+                return found;
+        }
+        for (const auto& entry : value.cell) {
+            if (const CVar* found = find_handle_recursive(entry, handle_id))
+                return found;
+        }
+        return nullptr;
+    };
+
     CVar out;
     out.Reset(1);
     if (!ids.empty()) {
         if (ids.size() == 1) {
-            out.SetValue(static_cast<auxtype>(ids.front()));
+            const uint64_t handle_id = ids.front();
+            bool cloned_existing = false;
+            for (const auto& entry : frame->Vars) {
+                if (const CVar* found = find_handle_recursive(entry.second, handle_id)) {
+                    out = *found;
+                    cloned_existing = true;
+                    break;
+                }
+            }
+            if (!cloned_existing)
+                out.SetValue(static_cast<auxtype>(handle_id));
         } else {
             out.UpdateBuffer(static_cast<unsigned int>(ids.size()));
             for (size_t i = 0; i < ids.size(); ++i)
@@ -728,6 +807,204 @@ int aux_update_runtime_handle_members(auxContext* ctx, uint64_t handle_id, const
     bool updated = false;
     for (auto& entry : frame->Vars) {
         updated = update_runtime_handle_members_recursive(entry.second, handle_id, members) || updated;
+    }
+    return updated ? 0 : 1;
+}
+
+int aux_invoke_record_callback(auxContext** ctx,
+    uint64_t session_id,
+    const string& callback_name,
+    const auxRecordCallbackPayload& payload,
+    const auxConfig& cfg,
+    string& preview_or_error)
+{
+    if (!ctx || !*ctx)
+        return 1;
+    AuxScope* frame = reinterpret_cast<AuxScope*>(*ctx);
+    if (!frame || !frame->pEnv) {
+        preview_or_error = "AUX engine is not initialized.";
+        return 1;
+    }
+    if (callback_name.empty()) {
+        preview_or_error = "Callback name is empty.";
+        return 1;
+    }
+    if (session_id == 0) {
+        preview_or_error = "Callback session id is invalid.";
+        return 1;
+    }
+    if (payload.num_channels < 1 || payload.num_channels > 2) {
+        preview_or_error = "Record callback payload has unsupported channel count.";
+        return 1;
+    }
+
+    RecordCallbackSessionState& session = g_record_callback_sessions[frame][session_id];
+
+    if (session.callback_name.empty())
+        session.callback_name = callback_name;
+    else if (session.callback_name != callback_name) {
+        session = RecordCallbackSessionState{};
+        session.callback_name = callback_name;
+    }
+
+    if (!session.callback_func) {
+        string estr;
+        session.callback_func = frame->ReadUDF(estr, callback_name);
+        if (!session.callback_func) {
+            preview_or_error = estr.empty() ? ("Callback function not found: " + callback_name) : estr;
+            return 1;
+        }
+    }
+
+    CVar idx;
+    idx.SetValue(static_cast<auxtype>(payload.callback_index));
+    session.input_state.strut["?index"] = idx;
+    CVar fs;
+    fs.SetValue(static_cast<auxtype>(payload.sample_rate));
+    session.input_state.strut["?fs"] = fs;
+    session.input_state.strut["?data"] = make_audio_cvar_from_payload(payload);
+
+    AuxScope child(frame->pEnv);
+    child.u = frame->u;
+    child.u.title = callback_name;
+    child.u.debugstatus = null;
+    child.level = frame->level + 1;
+    child.dad = frame;
+    child.lhs = nullptr;
+    child.u.t_func = session.callback_func;
+    child.u.t_func_base = session.callback_func;
+    child.u.base = session.callback_func->str ? session.callback_func->str : callback_name;
+    child.node = child.u.t_func->child ? child.u.t_func->child->next : nullptr;
+    child.u.argout.clear();
+
+    AstNode* pOutParam = child.u.t_func->alt;
+    if (pOutParam) {
+        if (pOutParam->type == N_VECTOR) {
+            if (pOutParam->str)
+                pOutParam = ((AstNode*)pOutParam->str)->alt;
+            else
+                pOutParam = pOutParam->alt;
+            session.output_names.clear();
+            for (AstNode* pf = pOutParam; pf; pf = pf->next) {
+                if (!pf->str) continue;
+                if (is_reserved_record_handle_member_name(pf->str)) {
+                    preview_or_error = "Record callback output name '" + string(pf->str) + "' is reserved by recording handles.";
+                    return 1;
+                }
+                child.u.argout.push_back(pf->str);
+                session.output_names.push_back(pf->str);
+            }
+        } else {
+            preview_or_error = "Record callback UDF output should be a vector declaration.";
+            return 1;
+        }
+    }
+    size_t nargin_expected = 0;
+    string input_name;
+    for (AstNode* p = child.u.t_func->child; p; p = p->next) {
+        if (p->type == N_IDLIST)
+            p = p->child;
+        if (!p || !p->str)
+            continue;
+        ++nargin_expected;
+        if (input_name.empty())
+            input_name = p->str;
+    }
+    if (nargin_expected > 1) {
+        preview_or_error = "Record callback UDF expects too many input arguments.";
+        return 1;
+    }
+    if (!input_name.empty()) {
+        child.SetVar(input_name.c_str(), &session.input_state);
+        child.u.nargin = 1;
+    } else {
+        child.u.nargin = 0;
+    }
+
+    if (session.output_states.size() < child.u.argout.size())
+        session.output_states.resize(child.u.argout.size());
+    for (size_t i = 0; i < child.u.argout.size(); ++i)
+        child.SetVar(child.u.argout[i].c_str(), &session.output_states[i]);
+
+    preview_or_error.clear();
+    try {
+        child.CallUDF(session.callback_func, nullptr, child.u.argout.size());
+        for (size_t i = 0; i < child.u.argout.size(); ++i) {
+            auto it = child.Vars.find(child.u.argout[i]);
+            if (it != child.Vars.end())
+                session.output_states[i] = it->second;
+        }
+        return 0;
+    }
+    catch (AuxScope* ast) {
+        if (ast->u.debugstatus == abort2base) {
+            preview_or_error = "Aborted to base.";
+            return static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR);
+        } else if (ast->u.debugstatus == paused) {
+            preview_or_error = "(dbg)";
+            *ctx = reinterpret_cast<auxContext*>(ast);
+            return static_cast<int>(auxEvalStatus::AUX_EVAL_PAUSED);
+        }
+        preview_or_error = "Execution interrupted.";
+        return static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR);
+    }
+    catch (AuxScope_exception e) {
+        preview_or_error = e.getErrMsg();
+        return 1;
+    }
+    catch (const char* msg) {
+        preview_or_error = msg ? msg : "Unknown callback error.";
+        return 1;
+    }
+}
+
+namespace {
+bool attach_runtime_handle_member_recursive(CVar& value, uint64_t handle_id, const string& member_name, const CVar& member_value)
+{
+    bool updated = false;
+    if (value.IsRuntimeHandle() && ISSCALARG(value.type())) {
+        const double rounded = std::round(value.value());
+        if (rounded > 0 && std::fabs(value.value() - rounded) < 1e-9 &&
+            static_cast<uint64_t>(rounded) == handle_id) {
+            value.strut[member_name] = member_value;
+            updated = true;
+        }
+    }
+    for (auto& entry : value.strut) {
+        updated = attach_runtime_handle_member_recursive(entry.second, handle_id, member_name, member_value) || updated;
+    }
+    for (auto& entry : value.cell) {
+        updated = attach_runtime_handle_member_recursive(entry, handle_id, member_name, member_value) || updated;
+    }
+    return updated;
+}
+} // namespace
+
+int aux_attach_record_callback_outputs_to_handle(auxContext* ctx, uint64_t session_id, uint64_t handle_id)
+{
+    auto* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!frame || !frame->pEnv || session_id == 0 || handle_id == 0)
+        return -1;
+
+    auto scopeIt = g_record_callback_sessions.find(frame);
+    if (scopeIt == g_record_callback_sessions.end())
+        return 1;
+    auto sessionIt = scopeIt->second.find(session_id);
+    if (sessionIt == scopeIt->second.end())
+        return 1;
+    if (sessionIt->second.output_states.empty() || sessionIt->second.output_names.empty())
+        return 1;
+    if (sessionIt->second.output_states.size() < sessionIt->second.output_names.size())
+        return 1;
+
+    bool updated = false;
+    for (auto& entry : frame->Vars) {
+        for (size_t i = 0; i < sessionIt->second.output_names.size(); ++i) {
+            updated = attach_runtime_handle_member_recursive(entry.second,
+                                                             handle_id,
+                                                             sessionIt->second.output_names[i],
+                                                             sessionIt->second.output_states[i]) || updated;
+        }
     }
     return updated ? 0 : 1;
 }

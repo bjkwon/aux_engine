@@ -110,6 +110,11 @@ Cfunction set_builtin_function_delete(fGate fp)
 	return make_graphics_builtin(fp, { "object" }, {});
 }
 
+Cfunction set_builtin_function_repaint(fGate fp)
+{
+	return make_graphics_builtin(fp, { "object" }, {});
+}
+
 void _figure(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	if (!past || !past->pEnv || !past->pEnv->graphics_backend.notify)
@@ -409,12 +414,15 @@ void _delete(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	if (!past || !past->pEnv || !past->pEnv->graphics_backend.notify)
 		throw exception_etc(*past, pnode, "Graphics backend not available in this frontend.").raise();
-	if (args.size() != 1)
+	int actualCount = 0;
+	for (const AstNode* an = first_arg_node(pnode); an; an = an->next)
+		++actualCount;
+	if (actualCount != 1)
 		throw exception_etc(*past, pnode, "delete() requires a graphics handle.").raise();
 	if (!past->pEnv->graphics_backend.delete_handle)
 		throw exception_etc(*past, pnode, "The active graphics backend does not provide delete(handle) support yet.").raise();
 
-	const CVar& arg = args.front();
+	const CVar& arg = past->Sig;
 	const uint16_t tp = arg.type();
 	if (!ISSCALAR(tp))
 		throw exception_etc(*past, pnode, "delete() requires a graphics handle.").raise();
@@ -440,6 +448,41 @@ void _delete(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		CVar empty;
 		past->SetVar(argNode->str, &empty);
 	}
+	past->Sig.Reset();
+}
+
+void _repaint(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
+{
+	if (!past || !past->pEnv || !past->pEnv->graphics_backend.notify)
+		throw exception_etc(*past, pnode, "Graphics backend not available in this frontend.").raise();
+	int actualCount = 0;
+	for (const AstNode* an = first_arg_node(pnode); an; an = an->next)
+		++actualCount;
+	if (actualCount != 1)
+		throw exception_etc(*past, pnode, "repaint() requires a graphics handle.").raise();
+	if (!past->pEnv->graphics_backend.repaint_handle)
+		throw exception_etc(*past, pnode, "The active graphics backend does not provide repaint(handle) support yet.").raise();
+
+	const CVar& arg = past->Sig;
+	const uint16_t tp = arg.type();
+	if (!ISSCALAR(tp))
+		throw exception_etc(*past, pnode, "repaint() requires a graphics handle.").raise();
+
+	const double handleValue = arg.value();
+	const double rounded = std::round(handleValue);
+	if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
+		throw exception_etc(*past, pnode, "repaint() requires a graphics handle.").raise();
+
+	string err;
+	const int ok = past->pEnv->graphics_backend.repaint_handle(
+		past->pEnv->graphics_backend.userdata,
+		static_cast<uint64_t>(rounded),
+		err);
+	if (!ok) {
+		if (err.empty()) err = "Failed to repaint graphics handle.";
+		throw exception_etc(*past, pnode, err).raise();
+	}
+
 	past->Sig.Reset();
 }
 

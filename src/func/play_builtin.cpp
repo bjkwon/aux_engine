@@ -28,6 +28,16 @@ bool is_playback_handle(const CVar& value)
 		value.strut.find("prog") != value.strut.end();
 }
 
+bool is_recording_handle(const CVar& value)
+{
+	if (!value.IsRuntimeHandle())
+		return false;
+	const auto typeIt = value.strut.find("type");
+	if (typeIt == value.strut.end() || !typeIt->second.IsString())
+		return false;
+	return typeIt->second.str() == "audio_record";
+}
+
 bool is_audio_value(const CVar& value)
 {
 	const auto tp = value.type();
@@ -69,6 +79,11 @@ void set_playback_member(CVar& target, const char* name, double value)
 	CVar member;
 	member.SetValue(static_cast<auxtype>(value));
 	target.strut[name] = member;
+}
+
+void set_recording_member(CVar& target, const char* name, double value)
+{
+	set_playback_member(target, name, value);
 }
 
 void set_playback_handle_result(CVar& out, uint64_t handle_id, const CVar& audio, int repeat_count)
@@ -257,34 +272,73 @@ void _stop_pause_resume(AuxScope* past, const AstNode* pnode, const vector<CVar>
 
 	const char* fname = (pnode && pnode->str) ? pnode->str : "";
 	auxPlaybackCommand command = auxPlaybackCommand::AUX_PLAYBACK_STOP;
+	auxRecordCommand record_command = auxRecordCommand::AUX_RECORD_STOP;
 	if (strcmp(fname, "stop") == 0) {
 		command = auxPlaybackCommand::AUX_PLAYBACK_STOP;
+		record_command = auxRecordCommand::AUX_RECORD_STOP;
 	}
 	else if (strcmp(fname, "pause") == 0) {
 		command = auxPlaybackCommand::AUX_PLAYBACK_PAUSE;
+		record_command = auxRecordCommand::AUX_RECORD_PAUSE;
 	}
 	else if (strcmp(fname, "resume") == 0) {
 		command = auxPlaybackCommand::AUX_PLAYBACK_RESUME;
+		record_command = auxRecordCommand::AUX_RECORD_RESUME;
 	}
 	else {
 		throw exception_etc(*past, pnode, string(fname) + "() is not available yet.").raise();
 	}
 
 	const CVar* handle_arg = nullptr;
-	if (is_playback_handle(past->Sig)) {
+	if (is_playback_handle(past->Sig) || is_recording_handle(past->Sig)) {
 		handle_arg = &past->Sig;
 	}
-	else if (!args.empty() && is_playback_handle(args[0])) {
+	else if (!args.empty() && (is_playback_handle(args[0]) || is_recording_handle(args[0]))) {
 		handle_arg = &args[0];
 	}
 
 	if (!handle_arg || !ISSCALARG(handle_arg->type()))
-		throw exception_etc(*past, pnode, string(fname) + "() requires a playback handle.").raise();
+		throw exception_etc(*past, pnode, string(fname) + "() requires an audio handle.").raise();
 
 	const double handleValue = handle_arg->value();
 	const double rounded = std::round(handleValue);
 	if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
-		throw exception_etc(*past, pnode, string(fname) + "() requires a playback handle.").raise();
+		throw exception_etc(*past, pnode, string(fname) + "() requires an audio handle.").raise();
+
+	const bool recording_handle = is_recording_handle(*handle_arg);
+	if (recording_handle) {
+		if (!past->pEnv->playback_backend.record_async_control)
+			throw exception_etc(*past, pnode, "Audio recording control backend not available in this frontend.").raise();
+
+		string err;
+		const int ok = past->pEnv->playback_backend.record_async_control(
+			past->pEnv->playback_backend.userdata,
+			static_cast<uint64_t>(rounded),
+			record_command,
+			err);
+		if (ok != 0) {
+			past->Sig = *handle_arg;
+			if (record_command == auxRecordCommand::AUX_RECORD_STOP) {
+				set_recording_member(past->Sig, "active", 0.0);
+				set_recording_member(past->Sig, "paused", 0.0);
+				if (past->Sig.strut.find("dur") != past->Sig.strut.end() &&
+					past->Sig.strut["dur"].value() > 0.0) {
+					set_recording_member(past->Sig, "prog", 100.0);
+					set_recording_member(past->Sig, "durLeft", 0.0);
+				}
+			}
+			else if (record_command == auxRecordCommand::AUX_RECORD_PAUSE) {
+				set_recording_member(past->Sig, "paused", 1.0);
+			}
+			else if (record_command == auxRecordCommand::AUX_RECORD_RESUME) {
+				set_recording_member(past->Sig, "paused", 0.0);
+			}
+			return;
+		}
+		past->Sig.Reset(1);
+		past->Sig.SetValue(-1.0);
+		return;
+	}
 
 	string err;
 	const int ok = past->pEnv->playback_backend.control(
