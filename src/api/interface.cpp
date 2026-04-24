@@ -10,6 +10,7 @@
 #include <sstream>
 #include <cmath>
 #include <atomic>
+#include <exception>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
 #include <auxe/auxe.h>
@@ -318,6 +319,14 @@ int aux_eval(auxContext** ctx, const string& script, const auxConfig& cfg, strin
     }
     catch (const char* msg) {
         preview_or_error = msg;
+        return 1;
+    }
+    catch (const std::exception& e) {
+        preview_or_error = e.what();
+        return 1;
+    }
+    catch (...) {
+        preview_or_error = "Unexpected internal error.";
         return 1;
     }
 }

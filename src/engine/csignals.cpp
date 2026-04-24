@@ -16,6 +16,7 @@
 
 #include "AuxScope.h"
 #include <cstring> // for g++
+#include <stdexcept>
 
 #include <math.h>
 #include <limits> 
@@ -126,6 +127,12 @@ body& body::operator=(const body & rhs)
 auxtype body::_max(unsigned int id, int unsigned len, void* pind) const
 {
 	if (len == 0) len = nSamples;
+	if (!buf || nSamples == 0 || len == 0 || id >= nSamples || id + len > nSamples)
+	{
+		if (pind)
+			*(int*)pind = -1;
+		throw std::runtime_error("max() on empty or invalid range");
+	}
 	auto it = max_element(buf + id, buf + id + len);
 	if (pind)
 		*(int*)pind = it - buf;
@@ -135,6 +142,12 @@ auxtype body::_max(unsigned int id, int unsigned len, void* pind) const
 auxtype body::_min(unsigned int id, unsigned int len, void* pind) const
 {
 	if (len == 0) len = nSamples;
+	if (!buf || nSamples == 0 || len == 0 || id >= nSamples || id + len > nSamples)
+	{
+		if (pind)
+			*(int*)pind = -1;
+		throw std::runtime_error("min() on empty or invalid range");
+	}
 	auto it = min_element(buf + id, buf + id + len);
 	if (pind)
 		*(int*)pind = it - buf;

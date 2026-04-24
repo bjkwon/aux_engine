@@ -966,7 +966,10 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 	{
 		CVar ind;
 		eval_index(ptree->child, *psigBase, ind);
-		extract_by_index(Sig, ind, *psigBase, false);
+		if (ind.nSamples == 0)
+			Sig.Reset();
+		else
+			extract_by_index(Sig, ind, *psigBase, false);
 	}
 	else if (ptree->type == N_TIME_EXTRACT)
 	{

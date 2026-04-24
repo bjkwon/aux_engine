@@ -211,10 +211,8 @@ void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index)
 				isig2 = Compute(p);
 				ends.pop_back(); // pop 2-D end value from the stack here
 			}
-			auto mx = isig2._max();
-			auto nx = varLHS.Len();
 			if (isig2.IsLogical()) index_array_satisfying_condition(isig2);
-			else if (isig2._max() > (double)varLHS.Len())
+			if (isig2.nSamples > 0 && isig2._max() > (double)varLHS.Len())
 			{
 				oss << "max of 2nd index " << isig2._max() << " exceeds" << varLHS.Len() << ".";
 				throw exception_range(this, pInd, oss.str().c_str(), "");
@@ -228,7 +226,7 @@ void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index)
 	}
 	ends.pop_back();
 	//Check if index is within range 
-	if (index._max() > varLHS.nSamples || index._min() < 1) {
+	if (index.nSamples > 0 && (index._max() > varLHS.nSamples || index._min() < 1)) {
 		oss << index._max();
 		throw exception_range(*this, pInd, oss.str(), "").raise();
 	}
@@ -404,6 +402,8 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
 		}
 		// x(ind): process ind
 		eval_index(plhs->alt->child, *pvarLHS, lhs_index);
+		if (lhs_index.nSamples == 0)
+			return;
 		//check size
 		if (RHS.nSamples>1 && lhs_index.nSamples > 1)
 		if (lhs_index.nSamples != RHS.nSamples || lhs_index.nGroups != RHS.nGroups)
@@ -556,6 +556,19 @@ void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, b
 void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* plhs, const AstNode* prhs)
 {
 	bool isreplica = prhs != NULL;
+	if (lhs_index.nSamples == 0)
+	{
+		CVar rhs_eval;
+		const CVar* prhs_obj = &robj;
+		if (isreplica)
+		{
+			rhs_eval = Compute(prhs);
+			prhs_obj = &rhs_eval;
+		}
+		if (prhs_obj->type() == TYPEBIT_NULL || prhs_obj->nSamples == 0)
+			return;
+		throw exception_etc(*this, plhs, "Empty index on LHS can only be assigned a null value.").raise();
+	}
 	if (plhs->alt->type == N_TIME_EXTRACT)
 	{
 		if (isreplica) { //RL-T

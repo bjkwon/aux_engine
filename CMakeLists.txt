@@ -266,4 +266,15 @@ if(AUXE_BUILD_TESTS)
     NAME auxe_regression_graphics_nogui
     COMMAND auxe_regression_graphics_nogui
   )
+
+  add_executable(auxe_regression_eval_errors
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_eval_errors.cpp
+  )
+  target_link_libraries(auxe_regression_eval_errors PRIVATE auxe)
+  target_include_directories(auxe_regression_eval_errors PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  add_test(
+    NAME auxe_regression_eval_errors
+    COMMAND auxe_regression_eval_errors
+  )
 endif()
