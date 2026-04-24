@@ -265,8 +265,6 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("pitchscale", pitchtime);
 	SET_BUILTIN_FUNC("respeed", pitchtime);
 
-	SET_BUILTIN_FUNC("awst", awst);
-
 	SET_PSEUDO_VARS("i", imaginary_unit);
 	SET_PSEUDO_VARS("e", natural_log_base);
 	SET_PSEUDO_VARS("pi", pi);

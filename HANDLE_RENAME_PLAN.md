@@ -51,7 +51,6 @@ Key locations:
 - [`src/engine/AuxScope.h`](/Users/bkwon/dev/aux_engine/src/engine/AuxScope.h)
 - [`src/api/interface.cpp`](/Users/bkwon/dev/aux_engine/src/api/interface.cpp)
 - [`src/func/cell_func.cpp`](/Users/bkwon/dev/aux_engine/src/func/cell_func.cpp)
-- [`src/func/_awscli.cpp`](/Users/bkwon/dev/aux_engine/src/func/_awscli.cpp)
 - [`src/func/objchecker.cpp`](/Users/bkwon/dev/aux_engine/src/func/objchecker.cpp)
 - [`/Users/bkwon/dev/auxlab2/src/AuxEngineFacade.cpp`](/Users/bkwon/dev/auxlab2/src/AuxEngineFacade.cpp)
 
@@ -158,9 +157,7 @@ If we actually do the rename, the first patch should likely touch only:
 - [`src/engine/typecheck.cpp`](/Users/bkwon/dev/aux_engine/src/engine/typecheck.cpp)
 - [`src/engine/AuxScope.h`](/Users/bkwon/dev/aux_engine/src/engine/AuxScope.h)
 - [`src/func/cell_func.cpp`](/Users/bkwon/dev/aux_engine/src/func/cell_func.cpp)
-- [`src/func/_awscli.cpp`](/Users/bkwon/dev/aux_engine/src/func/_awscli.cpp)
 - [`src/func/objchecker.cpp`](/Users/bkwon/dev/aux_engine/src/func/objchecker.cpp)
 - [`/Users/bkwon/dev/auxlab2/src/AuxEngineFacade.cpp`](/Users/bkwon/dev/auxlab2/src/AuxEngineFacade.cpp)
 
 This keeps the first rename patch small and easy to review.
-

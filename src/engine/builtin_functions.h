@@ -195,7 +195,6 @@ void _sqrt(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _sin(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 
 DECL_GATE(_pitchtime)
-DECL_GATE(_awst)
 DECL_GATE(_figure)
 DECL_GATE(_axes)
 DECL_GATE(_plot)

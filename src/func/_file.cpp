@@ -23,18 +23,9 @@ static bool starts_with_http_url(const string& s)
 	return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
 }
 
-static bool starts_with_s3_url(const string& s)
-{
-	if (s.size() < 5) return false;
-	string lower(s);
-	transform(lower.begin(), lower.end(), lower.begin(),
-		[](unsigned char c) { return (char)tolower(c); });
-	return lower.rfind("s3://", 0) == 0;
-}
-
 static bool is_remote_url(const string& s)
 {
-	return starts_with_http_url(s) || starts_with_s3_url(s);
+	return starts_with_http_url(s);
 }
 
 static string shell_quote_posix(const string& s)
@@ -78,54 +69,10 @@ static bool download_http_url_to_file(const string& url, const string& outPath, 
 #endif
 }
 
-static bool download_s3_url_to_file(const string& url, const string& outPath, string& errstr)
-{
-#ifdef _WIN32
-	string cmd = "aws s3 cp \"";
-	cmd += url;
-	cmd += "\" \"";
-	cmd += outPath;
-	cmd += "\" >nul 2>&1";
-	if (system(cmd.c_str()) == 0)
-		return true;
-	errstr = "Unable to download S3 URL (aws s3 cp failed): " + url;
-	return false;
-#else
-	string qUrl = shell_quote_posix(url);
-	string qOut = shell_quote_posix(outPath);
-
-	// GUI-launched apps on macOS often have a minimal PATH that omits Homebrew bins.
-	string cmd = "PATH=/opt/homebrew/bin:/usr/local/bin:/opt/aws-cli/bin:/usr/bin:/bin:$PATH aws s3 cp "
-		+ qUrl + " " + qOut + " >/dev/null 2>&1";
-	if (system(cmd.c_str()) == 0)
-		return true;
-
-	const char* awsCandidates[] = {
-		"/opt/homebrew/bin/aws",
-		"/usr/local/bin/aws",
-		"/opt/aws-cli/bin/aws",
-		"/usr/bin/aws"
-	};
-	for (const char* awsPath : awsCandidates) {
-		if (access(awsPath, X_OK) == 0) {
-			string absCmd = shell_quote_posix(awsPath) + " s3 cp "
-				+ qUrl + " " + qOut + " >/dev/null 2>&1";
-			if (system(absCmd.c_str()) == 0)
-				return true;
-		}
-	}
-
-	errstr = "Unable to download S3 URL (aws s3 cp failed). Ensure AWS CLI is installed and on PATH: " + url;
-	return false;
-#endif
-}
-
 static bool download_remote_url_to_file(const string& url, const string& outPath, string& errstr)
 {
 	if (starts_with_http_url(url))
 		return download_http_url_to_file(url, outPath, errstr);
-	if (starts_with_s3_url(url))
-		return download_s3_url_to_file(url, outPath, errstr);
 	errstr = "Unsupported remote URL scheme: " + url;
 	return false;
 }
@@ -200,21 +147,6 @@ struct ScopedTempFile
 	}
 };
 
-static bool looks_like_s3_bucket_key(const string& s)
-{
-	if (s.empty()) return false;
-	if (starts_with_http_url(s) || starts_with_s3_url(s)) return false;
-	if (s.find("://") != string::npos) return false;
-#ifdef _WIN32
-	if (s.size() >= 2 && std::isalpha((unsigned char)s[0]) && s[1] == ':')
-		return false; // likely drive path (e.g. C:\...)
-#endif
-	if (s[0] == '/' || s[0] == '\\') return false;
-	size_t slash = s.find('/');
-	if (slash == string::npos || slash == 0 || slash + 1 >= s.size()) return false;
-	return true;
-}
-
 static bool fetch_bytes_from_source(const string& source, vector<unsigned char>& out, string& errstr)
 {
 	if (is_remote_url(source))
@@ -228,23 +160,7 @@ static bool fetch_bytes_from_source(const string& source, vector<unsigned char>&
 		tempFile.path = tempPath;
 		return read_file_binary(tempPath, out, errstr);
 	}
-	if (read_file_binary(source, out, errstr))
-		return true;
-
-	// If local open fails, support "bucket/key" shorthand as an S3 source.
-	if (looks_like_s3_bucket_key(source))
-	{
-		string tempPath;
-		ScopedTempFile tempFile;
-		string s3url = "s3://" + source;
-		if (!make_temp_remote_path(tempPath, errstr))
-			return false;
-		if (!download_remote_url_to_file(s3url, tempPath, errstr))
-			return false;
-		tempFile.path = tempPath;
-		return read_file_binary(tempPath, out, errstr);
-	}
-	return false;
+	return read_file_binary(source, out, errstr);
 }
 
 Cfunction set_builtin_function_wave(fGate fp)
