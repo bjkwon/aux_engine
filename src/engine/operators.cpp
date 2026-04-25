@@ -109,12 +109,37 @@ bool CSignal::operate(const CSignal& sec, char op)
 	// Exception handling is yet to be done 3/8/2019
 	// If fs for one is 1 and for the other is >3 (such as 44100)
 	// make fs for this the big number
-	if (fs == 1 && sec.fs > 3) fs = sec.fs;
-	if (sec.IsScalar())
+	if (IsScalar() && sec.IsScalar() && !IsComplex() && !sec.IsComplex() &&
+		(IsLogical() || sec.IsLogical()))
 	{
-		if (sec.IsComplex())
+		const auxtype lhs = value();
+		const auxtype rhs = sec.value();
+		if (op == '+')
+			SetValue(lhs + rhs);
+		else if (op == '-')
+			SetValue(lhs - rhs);
+		else if (op == '*')
+			SetValue(lhs * rhs);
+		else if (op == '/')
+			SetValue(lhs / rhs);
+		return true;
+	}
+	if (fs == 1 && sec.fs > 3) fs = sec.fs;
+	CSignal secReal;
+	const CSignal* psec = &sec;
+	if (IsLogical())
+		SetReal();
+	if (sec.IsLogical())
+	{
+		secReal = sec;
+		secReal.SetReal();
+		psec = &secReal;
+	}
+	if (psec->IsScalar())
+	{
+		if (psec->IsComplex())
 		{
-			complex<auxtype > val = sec.cvalue();
+			complex<auxtype > val = psec->cvalue();
 			if (!IsComplex()) SetComplex();
 			if (op == '+')
 				for_each(cbuf, cbuf + nSamples, [val](complex<auxtype >& v) { v += val; });
@@ -127,7 +152,7 @@ bool CSignal::operate(const CSignal& sec, char op)
 		}
 		else
 		{
-			auxtype  val = sec.value();
+			auxtype  val = psec->value();
 			if (IsComplex())
 			{
 				if (op == '+')
@@ -151,28 +176,28 @@ bool CSignal::operate(const CSignal& sec, char op)
 					for_each(buf, buf + nSamples, [val](auxtype & v) { v /= val; });
 			}
 		}
-		snap += sec.snap;
+		snap += psec->snap;
 		if (snap) snap = 1;
 	}
 	else
 	{
 		if (IsScalar()) 
 		{
-			snap += sec.snap;
+			snap += psec->snap;
 			if (snap) snap = 1;
 		}
 		else
 		{
-			if (snap & sec.snap)
+			if (snap & psec->snap)
 				throw "Operation between two TSEQ not allowed.";
 		}
 		uint64_t offset, idBegin, idEnd;
-		if (!operator_prep(sec, idBegin, idEnd, offset)) // if not overlapping, just skip
+		if (!operator_prep(*psec, idBegin, idEnd, offset)) // if not overlapping, just skip
 			return false;
 		int k = 0;
-		if (sec.IsComplex())
+		if (psec->IsComplex())
 		{
-			complex<auxtype>* cbuf2 = sec.cbuf + offset;
+			complex<auxtype>* cbuf2 = psec->cbuf + offset;
 			if (op == '+')
 				for_each(cbuf + idBegin, cbuf + idEnd, [cbuf2, &k](complex<auxtype>& v) { v += cbuf2[k++]; });
 			else if (op == '-')
@@ -184,7 +209,7 @@ bool CSignal::operate(const CSignal& sec, char op)
 		}
 		else
 		{
-			auxtype* buf2 = sec.buf + offset;
+			auxtype* buf2 = psec->buf + offset;
 			if (IsComplex())
 			{
 				if (op == '+')

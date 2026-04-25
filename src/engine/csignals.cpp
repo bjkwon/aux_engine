@@ -469,7 +469,14 @@ void body::SetReal()
 	{
 		body out;
 		out.UpdateBuffer(nSamples);
-		for (auto &v : *this) out.buf[k++] = (auxtype)v;
+		if (bufType == 'L')
+		{
+			for (; k < nSamples; k++) out.buf[k] = logbuf[k] ? (auxtype)1. : (auxtype)0.;
+		}
+		else
+		{
+			for (; k < nSamples; k++) out.buf[k] = (auxtype)buf[k];
+		}
 		*this = out;
 	}
 }
