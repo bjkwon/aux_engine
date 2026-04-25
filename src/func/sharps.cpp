@@ -1,4 +1,5 @@
 #include "functions_common.h"
+#include <limits>
 
 Cfunction set_builtin_function_constant(fGate fp)
 {
@@ -33,6 +34,16 @@ void _pi(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 void _natural_log_base(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	past->Sig.SetValue(exp(1));
+}
+
+void _infinity(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
+{
+	past->Sig.SetValue(std::numeric_limits<auxtype>::infinity());
+}
+
+void _not_a_number(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
+{
+	past->Sig.SetValue(std::numeric_limits<auxtype>::quiet_NaN());
 }
 
 void _boolconst(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)

@@ -1208,16 +1208,18 @@ CVar* AuxScope::GetVariable(const char* varname, const AstNode* pnode, CVar* pva
 	}
 	else
 	{
-		auto pit = pEnv->pseudo_vars.find(varname);
-		if (pit != pEnv->pseudo_vars.end()) {
-			vector<CVar> dummy;
-			pit->second.func(this, pnode, dummy);
-			return &Sig;
-		}
 		if (Vars.find(varname) != Vars.end())
 			pout = &Vars.at(varname);
-		else if (GOvars.find(varname) == GOvars.end())
-			return NULL;
+		else {
+			auto pit = pEnv->pseudo_vars.find(varname);
+			if (pit != pEnv->pseudo_vars.end()) {
+				vector<CVar> dummy;
+				pit->second.func(this, pnode, dummy);
+				return &Sig;
+			}
+			else if (GOvars.find(varname) == GOvars.end())
+				return NULL;
+		}
 		fullvarname = varname;
 	}
 	if (pout) return pout;

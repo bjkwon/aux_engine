@@ -266,8 +266,11 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("respeed", pitchtime);
 
 	SET_PSEUDO_VARS("i", imaginary_unit);
+	SET_PSEUDO_VARS("j", imaginary_unit);
 	SET_PSEUDO_VARS("e", natural_log_base);
 	SET_PSEUDO_VARS("pi", pi);
+	SET_PSEUDO_VARS("inf", infinity);
+	SET_PSEUDO_VARS("nan", not_a_number);
 	SET_PSEUDO_VARS("false", boolconst);
 	SET_PSEUDO_VARS("true", boolconst);
 

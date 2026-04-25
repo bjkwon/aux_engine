@@ -154,6 +154,8 @@ void _conv(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _imaginary_unit(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _pi(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _natural_log_base(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
+void _infinity(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
+void _not_a_number(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _boolconst(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 
 DECL_GATE(_pow)
