@@ -39,6 +39,26 @@ static std::string prompt_text()
 	return "AUX> ";
 }
 
+static void stabilize_working_directory(const char* argv0)
+{
+	try {
+		const auto cwd = filesystem::current_path();
+		if (cwd != filesystem::path("/"))
+			return;
+		error_code ec;
+		auto exePath = filesystem::weakly_canonical(filesystem::absolute(argv0), ec);
+		if (ec || exePath.empty())
+			exePath = filesystem::absolute(argv0, ec);
+		if (ec || exePath.empty())
+			return;
+		auto exeDir = exePath.parent_path();
+		if (!exeDir.empty())
+			filesystem::current_path(exeDir, ec);
+	}
+	catch (const filesystem::filesystem_error&) {
+	}
+}
+
 void filesystem_call(const vector<string> cmd)
 {
 	if (cmd.front() == "pwd") {
@@ -167,6 +187,7 @@ int main(int argc, char** argv)
 {
 	auxContext* ctx = nullptr;
 	try {
+		stabilize_working_directory(argv[0]);
 		srand((unsigned)time(0));
 		int fs0 = 0;
 		vector<string> auxpathfromenv;

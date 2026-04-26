@@ -24,6 +24,33 @@ using namespace std;
 
 int GetFileText(FILE* fp, string& strOut); // utils.cpp
 
+#ifndef _WINDOWS
+static string preferred_relative_base_dir(const vector<string>& auxPaths)
+{
+	string cwd = get_current_dir();
+	if (!cwd.empty() && cwd != DIRMARKERSTR)
+		return cwd;
+	for (const auto& rawPath : auxPaths)
+	{
+		if (rawPath.empty() || rawPath == DIRMARKERSTR)
+			continue;
+		string path = rawPath;
+		if (path.back() != DIRMARKER)
+			path += DIRMARKER;
+		return path;
+	}
+	const char* home = getenv("HOME");
+	if (home && *home)
+	{
+		string path(home);
+		if (!path.empty() && path.back() != DIRMARKER)
+			path += DIRMARKER;
+		return path;
+	}
+	return cwd;
+}
+#endif
+
 static int count_time_unit_bits(int mask)
 {
 	int out = 0;
@@ -1939,11 +1966,17 @@ string AuxScope::makefullfile(const string& fname, string extension)
 	if (!ext[0] && !extension.empty())
 		fullfilename += extension;
 #else
-	auto tcopy = fname;
 	fullfilename = fname;
-	transform(tcopy.begin(), tcopy.end(), tcopy.begin(), ::tolower);
-	if (tcopy.substr(tcopy.size() - 4) != ".wav")
-		fullfilename += ".wav";
+	if (!fname.empty() && fname[0] != DIRMARKER)
+	{
+		fullfilename = preferred_relative_base_dir(pEnv->AuxPath);
+		if (fname.rfind("./", 0) == 0)
+			fullfilename += fname.substr(2);
+		else
+			fullfilename += fname;
+	}
+	if (get_ext_only(fullfilename).empty() && !extension.empty())
+		fullfilename += extension;
 #endif
 	return fullfilename;
 }
