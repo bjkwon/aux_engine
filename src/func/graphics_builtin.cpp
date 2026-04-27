@@ -9,6 +9,16 @@ void set_handle_result(CVar& out, std::uint64_t id)
 	out.MarkHandle(true);
 }
 
+bool is_axes_handle(const CVar& value)
+{
+	if (!value.IsRuntimeHandle())
+		return false;
+	const auto typeIt = value.strut.find("type");
+	if (typeIt == value.strut.end() || !typeIt->second.IsString())
+		return false;
+	return typeIt->second.str() == "axes";
+}
+
 const AstNode* first_arg_node(const AstNode* pnode)
 {
 	if (!pnode || !pnode->alt) return nullptr;
@@ -194,7 +204,10 @@ void _figure(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			sourceName.c_str(),
 			err);
 		if (id == 0) {
-			if (err.empty()) err = "Failed to create named figure.";
+			if (err.empty()) {
+				past->Sig.Reset();
+				return;
+			}
 			throw exception_etc(*past, pnode, err).raise();
 		}
 		set_handle_result(past->Sig, id);
@@ -230,6 +243,15 @@ void _axes(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	const uint16_t tp = arg.type();
 
 	if (ISSCALAR(tp)) {
+		if (is_axes_handle(arg)) {
+			const double handleValue = arg.value();
+			const double rounded = std::round(handleValue);
+			if (rounded <= 0 || std::fabs(handleValue - rounded) > 1e-9)
+				throw exception_etc(*past, pnode, "invalid axes argument").raise();
+			set_handle_result(past->Sig, static_cast<uint64_t>(rounded));
+			return;
+		}
+
 		if (!past->pEnv->graphics_backend.axes_from_handle)
 			throw exception_etc(*past, pnode, "The active graphics backend does not provide axes(handle) support yet.").raise();
 
