@@ -87,7 +87,7 @@ int timeargument(CVar& ratio, double audioDur, int fs)
 static inline int maxcc(double* x1, int len1, double* x2, int len2, int prevmaxid)
 {
 	const int len = len1 + len2 - 1;
-	double* buffer = new double[len];
+	vector<double> buffer(len);
 	for (int k = 0; k < len; k++)
 	{
 		double tp = 0.;
@@ -100,8 +100,7 @@ static inline int maxcc(double* x1, int len1, double* x2, int len2, int prevmaxi
 		}
 		buffer[k] = tp;
 	}
-	CSignal temp(buffer + len2, len - 2 * len2 + 1);
-	delete[] buffer;
+	CSignal temp(buffer.data() + len2, len - 2 * len2 + 1);
 	int maxid;
 	temp._max(0, len - 2 * len2 + 1, &maxid);
 	return (int)maxid;
@@ -225,40 +224,32 @@ static inline int spreader(int nSamples, int nBlocks, int tol, double ratio1, do
 static inline int set_time_grids(bool lengthadjust, int id1, int id2, double ratio1, double ratio2, int synHop, int* ingrid, int* outgrid, int outgridoffset)
 { // outgrid[0] is always 0
 	if (lengthadjust) ratio2 = ratio1;
-	double lastInGrid = (double)id1;
-	int blocksizeIn = id2 - id1;
-	int cumOutTP = 0;
 	double harmean = harmonicmean(ratio1, ratio2);
 	int nBlocks = (int)((id2 - id1) * harmean / synHop); // this should not be round to make consistent with L0 in adjust_hop()
-	double* _in = new double[nBlocks + 50];
-	double* _out = new double[nBlocks + 50];
-	_in[0] = (double)id1;
-	_out[0] = 0.;
 	nBlocks = spreader(id2 - id1, nBlocks, id1, ratio1, ratio2, synHop, ingrid, outgrid);
 	if (outgridoffset > 0)
 		for (int k = 0; k < nBlocks; k++)
 			outgrid[k] += outgridoffset;
-	delete[] _in;
-	delete[] _out;
 	return nBlocks;
 }
 
 static inline void stretch(bool nostretch, unsigned int nSamples, double* pout, double* overlapWind, const CSignal& input2,
 	int winLen, int synHop, size_t blockBegin, size_t blockEnd, int* ingr, int* outgr,
-	int& targetSize, int& nextOutIndex, int& del, size_t gridsize)
+	int& targetSize, int& nextOutIndex, int& del, size_t gridsize, vector<double>& windScratch)
 {
 	winLen = 2 * (outgr[blockBegin + 1] - outgr[blockBegin]);
-	double* wind = new double[winLen];
-	for (int k = 0; k < winLen; k++)
-		wind[k] = .5 * (1 - cos(2.0 * PI * k / (winLen - 1.0))); //hanning
+	if ((int)windScratch.size() != winLen)
+	{
+		windScratch.resize(winLen);
+		for (int k = 0; k < winLen; k++)
+			windScratch[k] = .5 * (1 - cos(2.0 * PI * k / (winLen - 1.0))); //hanning
+	}
+	const vector<double>& wind = windScratch;
 
-// timestretch_log.py #0
 	const int winLenHalf = (int)(winLen / 2. + .5);
 	int tolerance = ingr[0];
 	int lastInPoint = ingr[blockEnd] + synHop;
-	// timestretch_log.py #1
 	int xid0, yid0;
-	// timestretch_log.py #2
 	int nOverlap2 = 0;
 	nextOutIndex = 0;
 	int len1 = winLen + 2 * tolerance;
@@ -331,7 +322,6 @@ static inline void stretch(bool nostretch, unsigned int nSamples, double* pout, 
 				// and "natural progression of the last copied input segment (from Jonathan Driedger)"
 				int corrIDX1 = ingr[m + 1] - tolerance;
 				int corrIDX2 = ingr[m] + _synHop + del;
-				// timestretch_log.py #3
 				int len2 = winLen;
 				if (m >= gridsize - 1)
 				{
@@ -343,23 +333,18 @@ static inline void stretch(bool nostretch, unsigned int nSamples, double* pout, 
 					if (len2 < 1) break;
 				}
 				maxid = maxcc(&input2.buf[corrIDX1], len1, &input2.buf[corrIDX2], winLen, maxid);
-				// timestretch_log.py #4
 				del = tolerance - maxid + 1;
 				if (m == gridsize - 1)
 				{
 					if (del > 0 || outgr[m + 1] > nextOutIndex)
 						break;
 				}
-				// timestretch_log.py #5
 			}
-			// timestretch_log.py #6
 		}
 	}
-	// timestretch_log.py #7
 	targetSize = lastInPoint + outgr[blockEnd] - ingr[blockEnd] - synHop - outgr[blockBegin];
 	if (blockEnd == gridsize && nextOutIndex < targetSize + outgr[blockBegin])
 		nextOutIndex = targetSize + outgr[blockBegin] - 1;
-	delete[] wind;
 }
 
 
@@ -463,10 +448,9 @@ static CSignal __tsbase(const CSignal& base, void* parg, void* parg2)
 	int filledID = 0;
 	int cumProcessed = 0, del = 0;
 	const int nOutReserve = outgrid[chainIDX.back() - 1] + 2 * winLen;
-	double* pout = new double[nOutReserve];
-	double* overlapWind = new double[nOutReserve];
-	memset(pout, 0, sizeof(double) * nOutReserve);
-	memset(overlapWind, 0, sizeof(double) * nOutReserve);
+	vector<double> pout(nOutReserve, 0.);
+	vector<double> overlapWind(nOutReserve, 0.);
+	vector<double> windScratch;
 	CSignal input(fs, synHop + tolerance + base.nSamples); // making the input with zero padding1 at the front, copy the current buffer
 	memcpy(input.buf + synHop + tolerance, base.buf, base.nSamples * sizeof(auxtype));
 	CSignal secondzeropadds(fs, 2 * tolerance);
@@ -478,9 +462,9 @@ static CSignal __tsbase(const CSignal& base, void* parg, void* parg2)
 	{
 		int target;
 		bool nostretch = p->value() == 1. && pchain->value() == 1;
-		stretch(nostretch, ingrid[*it] - ingrid[0], pout, overlapWind,
+		stretch(nostretch, ingrid[*it] - ingrid[0], pout.data(), overlapWind.data(),
 			input, winLen, synHop, *(it - 1), *it, ingrid, outgrid,
-			target, lastOutIndex, del, chainIDX.back());
+			target, lastOutIndex, del, chainIDX.back(), windScratch);
 		targetSize += target;
 		if (pchain) pchain->tmark = targetSize * 1000. / fs;
 		// remove zeropading at the beginning and ending. Begin at winLenHalf and take outputLength elements
@@ -497,15 +481,12 @@ static CSignal __tsbase(const CSignal& base, void* parg, void* parg2)
 		if (overlapWind[p] > .001)
 			pout[p] /= overlapWind[p];
 	}
-	memcpy(out.buf, pout + lastOutIndex - targetSize + 1, sizeof(double) * targetSize);
+	memcpy(out.buf, pout.data() + lastOutIndex - targetSize + 1, sizeof(double) * targetSize);
 
-	// timestretch_log.py #8
 	out.SetFs(fs);
 	out.nSamples = filledID;
 	delete[] ingrid;
 	delete[] outgrid;
-	delete[] overlapWind;
-	delete[] pout;
 	if (returnTmarks)
 	{
 		CVar tmarks(1);
