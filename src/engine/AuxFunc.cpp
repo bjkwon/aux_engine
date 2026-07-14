@@ -363,7 +363,13 @@ static bool this_is_one_of_allowedset(uint16_t thistype, const vector<set<uint16
 void AuxScope::make_check_args_math(const AstNode* pnode)
 {
 	ostringstream ostr;
-	set<uint16_t> allowed = { 1, 2, 3, ALL_AUDIO_TYPES };
+	set<uint16_t> allowed = {
+		1, 2, 3,
+		TYPEBIT_COMPLEX + 1, TYPEBIT_COMPLEX + 2, TYPEBIT_COMPLEX + 3,
+		ALL_AUDIO_TYPES,
+		FFT_RESULTS_TYPES,
+		NONAUDIO_TEMPORAL_COMPLEX_TYPES
+	};
 	vector<set<uint16_t>> allowedvector;
 	allowedvector.push_back(allowed);
 	auto it = allowedvector.begin();

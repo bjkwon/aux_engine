@@ -84,6 +84,7 @@ namespace {
 
 constexpr int kMinWindowSize = 64;
 constexpr int kMaxWindowSize = 8192;
+constexpr double kDefaultWindowMs = 40.0;
 constexpr double kTransientFluxThreshold = 0.35;
 constexpr double kPhaseLockPeakFloor = 0.05;
 
@@ -106,6 +107,12 @@ static inline int next_pow2(int value)
 	while (out < value)
 		out <<= 1;
 	return out;
+}
+
+static inline int default_window_size_samples(int fs, int nSamples)
+{
+	const int fsBased = max(1, (int)llround(fs * kDefaultWindowMs / 1000.0));
+	return min(max(1, nSamples / 5), fsBased);
 }
 
 static RatioProfile build_ratio_profile(const CVar& ratio, int fs, int nSamples)
@@ -283,7 +290,7 @@ struct PvWorkspace
 
 static CSignal phase_vocoder_timestretch(const CSignal& base, const CVar& ratio, int fs)
 {
-	int winLen = min((int)base.nSamples / 5, 512);
+	int winLen = default_window_size_samples(fs, (int)base.nSamples);
 	if (!ratio.strut.empty())
 	{
 		auto finder = ratio.strut.find("windowsize");

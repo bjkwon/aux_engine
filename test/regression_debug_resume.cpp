@@ -400,6 +400,71 @@ static bool case10_switch_continue_after_pause(std::string& err) {
   return true;
 }
 
+static bool case11_debug_resume_error_surfaces_status_message(std::string& err) {
+  Session s("case11_debug_resume_error_surfaces_status_message");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!write_file(s.dir / "c11.aux",
+                  "function out = c11(x)\n"
+                  "a = zeros(8)\n"
+                  "n = 3\n"
+                  "a(n+1) = \"bad\"\n"
+                  "out = a\n", s.err) ||
+      !define_register(s, "c11")) { err = s.err; return false; }
+  if (!add_bp(s, "c11", 2)) { err = s.err; return false; }
+  if (eval(s, "r11 = c11(1)") != static_cast<int>(auxEvalStatus::AUX_EVAL_PAUSED) || !paused_line(s, 2)) {
+    err = s.err.empty() ? "Expected pause at c11 line 2." : s.err;
+    return false;
+  }
+  const auto resumeResult = aux_debug_resume(&s.ctx, auxDebugAction::AUX_DEBUG_CONTINUE);
+  if (resumeResult != auxDebugAction::AUX_DEBUG_ABORT_BASE) {
+    err = "Expected debug resume to abort to base after type error.";
+    return false;
+  }
+  const char* msg = aux_get_status_message(s.ctx);
+  if (!msg || std::string(msg).find("LHS and RHS have different object type.") == std::string::npos) {
+    err = std::string("Expected surfaced debug-resume error message, got: ") + (msg ? msg : "<null>");
+    return false;
+  }
+  return true;
+}
+
+static bool case12_step_exits_if_before_loop_restart(std::string& err) {
+  Session s("case12_step_exits_if_before_loop_restart");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!write_file(s.dir / "c12.aux",
+                  "function out = c12(x)\n"
+                  "first = 1\n"
+                  "i = 0\n"
+                  "while i < 1\n"
+                  "if first\n"
+                  "a = 10\n"
+                  "first = 0\n"
+                  "end\n"
+                  "b = 30\n"
+                  "i += 1\n"
+                  "end\n"
+                  "out = b + x\n", s.err) ||
+      !define_register(s, "c12")) { err = s.err; return false; }
+  if (!add_bp(s, "c12", 6)) { err = s.err; return false; }
+  if (eval(s, "r12 = c12(1)") != static_cast<int>(auxEvalStatus::AUX_EVAL_PAUSED) || !paused_line(s, 6)) {
+    err = s.err.empty() ? "Expected pause at c12 line 6." : s.err;
+    return false;
+  }
+  aux_debug_resume(&s.ctx, auxDebugAction::AUX_DEBUG_STEP);
+  if (!paused_line(s, 7)) {
+    err = s.err.empty() ? "Expected step to c12 line 7." : s.err;
+    return false;
+  }
+  aux_debug_resume(&s.ctx, auxDebugAction::AUX_DEBUG_STEP);
+  if (!paused_line(s, 9)) {
+    err = s.err.empty() ? "Expected step to c12 line 9 after exiting if block." : s.err;
+    return false;
+  }
+  aux_debug_resume(&s.ctx, auxDebugAction::AUX_DEBUG_CONTINUE);
+  if (!not_paused(s) || !expect_scalar(s, "r12", 31.0)) { err = s.err; return false; }
+  return true;
+}
+
 struct CaseSpec {
   const char* name;
   bool (*fn)(std::string&);
@@ -417,6 +482,8 @@ int main() {
       {"local_function_breakpoint_resolution", case8_local_and_cross_breakpoint_resolution},
       {"loop_continue_after_pause", case9_loop_continue_after_pause},
       {"switch_case_continue_after_pause", case10_switch_continue_after_pause},
+      {"debug_resume_error_surfaces_status_message", case11_debug_resume_error_surfaces_status_message},
+      {"step_exits_if_before_loop_restart", case12_step_exits_if_before_loop_restart},
   };
 
   for (const auto& tc : cases) {

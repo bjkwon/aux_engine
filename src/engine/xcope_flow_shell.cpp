@@ -417,6 +417,14 @@ const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_chec
 				u.debugstatus = paused;
 				throw this;
 			}
+			const AstNode* if_parent = find_enclosing_if_by_line(root, p->line);
+			if (if_parent && if_parent->next) {
+				u.paused_line = if_parent->next->line;
+				u.paused_file = resolve_paused_file_path(this);
+				u.paused_node = if_parent->next;
+				u.debugstatus = paused;
+				throw this;
+			}
 			const AstNode* loop_parent = find_enclosing_loop_by_line(root, p->line);
 			if (loop_parent) {
 				const AstNode* target = nullptr;
@@ -460,14 +468,6 @@ const AstNode* AuxScope::linebyline(const AstNode* p, bool skip_first_break_chec
 					u.debugstatus = paused;
 					throw this;
 				}
-			}
-			const AstNode* if_parent = find_enclosing_if_by_line(root, p->line);
-			if (if_parent && if_parent->next) {
-				u.paused_line = if_parent->next->line;
-				u.paused_file = resolve_paused_file_path(this);
-				u.paused_node = if_parent->next;
-				u.debugstatus = paused;
-				throw this;
 			}
 			const AstNode* sw_parent = find_enclosing_switch_by_line(root, p->line);
 			if (sw_parent && sw_parent->next) {

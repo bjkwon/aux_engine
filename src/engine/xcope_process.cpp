@@ -375,12 +375,17 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
 			return;
 		}
 		// check type.. mask with 0xFFF4 -- to mask the last two bits zero (clean the length bits) to check the type only (no length)
-		auto typerhs = RHS.type();
-		if (!pstruct || pstruct->alt)
-			if (typerhs > 0 && plhs->alt->type != N_STRUCT && (typelhs & (uint16_t)0xFFF4) != (typerhs & (uint16_t)0xFFF4)) {
-				if (!ISAUDIO(typelhs) || !ISAUDIO(typerhs)) // if one is single chain audio and the other is chained audio, it should't throw
-					throw exception_etc(*this, plhs, "LHS and RHS have different object type.").raise();
-			}
+        auto typerhs = RHS.type();
+        if (!pstruct || pstruct->alt) {
+            const bool indexedElementWrite = plhs->alt &&
+                                             plhs->alt->type != N_STRUCT &&
+                                             plhs->alt->type != N_TIME_EXTRACT;
+            const uint16_t typeMask = indexedElementWrite ? (uint16_t)0xFFF0 : (uint16_t)0xFFF4;
+            if (typerhs > 0 && plhs->alt->type != N_STRUCT && (typelhs & typeMask) != (typerhs & typeMask)) {
+                if (!ISAUDIO(typelhs) || !ISAUDIO(typerhs)) // if one is single chain audio and the other is chained audio, it should't throw
+                    throw exception_etc(*this, plhs, "LHS and RHS have different object type.").raise();
+            }
+        }
 		if (plhs->alt->type == N_TIME_EXTRACT)
 		{
 			// if lhs var is not audio, throw
@@ -470,17 +475,22 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 */
 void AuxScope::adjust_buf(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn)
 {
+	const size_t elemSize = lvar.bufBlockSize;
 	if (robj.nSamples == 0)
 	{ // truncate the LHS var buffer
 		if (contig)
 		{
-			memmove(lvar.buf + (uint64_t)lhs_index.buf[0] - 1, lvar.buf + (uint64_t)lhs_index.buf[lhs_index.nSamples - 1], (lvar.nSamples - (uint64_t)lhs_index.buf[0] - lhs_index.nSamples + 1) * sizeof(auxtype));
+			memmove(lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[0] - 1),
+			        lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[lhs_index.nSamples - 1]),
+			        (lvar.nSamples - (uint64_t)lhs_index.buf[0] - lhs_index.nSamples + 1) * elemSize);
 			lvar.nSamples -= lhs_index.nSamples;
 		}
 		else
 		{
 			for (uint64_t k = 0; k < lhs_index.nSamples; k++) {
-				memmove(lvar.buf + (uint64_t)lhs_index.buf[k] - 1, lvar.buf + (uint64_t)lhs_index.buf[k], (lvar.nSamples - (uint64_t)lhs_index.buf[k])  * sizeof(auxtype));
+				memmove(lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[k] - 1),
+				        lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[k]),
+				        (lvar.nSamples - (uint64_t)lhs_index.buf[k]) * elemSize);
 				--lvar.nSamples;
 				for (uint64_t p = k; p < lhs_index.nSamples; p++) lhs_index.buf[p]--;
 			}
@@ -489,24 +499,26 @@ void AuxScope::adjust_buf(CVar& lvar, const CVar& lhs_index, const CVar& robj, b
 	else if (robj.nSamples == 1)
 	{ // fill the buffer with the RHS value 
 		for (uint64_t k = 0; k < lhs_index.nSamples; k++)
-			lvar.buf[(uint64_t)lhs_index.buf[k] - 1] = robj.buf[0];
+			memcpy(lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[k] - 1), robj.logbuf, elemSize);
 	}
 	else if (lhs_index.nSamples == 1)
 	{
 		auto nCopied = lvar.nSamples + 1 - (uint16_t)lhs_index.buf[0];
 		lvar.UpdateBuffer(lvar.nSamples + robj.nSamples);
-		auxtype* pv = lvar.buf;
 		auto j = (uint64_t)lhs_index.buf[0] - 1;
-		memmove(&pv[j + robj.nSamples], &pv[j], nCopied * sizeof(auxtype));
-		auto pval = robj.buf;
-		memcpy(&pv[j], pval, robj.nSamples * sizeof(auxtype));
+		memmove(lvar.logbuf + elemSize * (j + robj.nSamples),
+		        lvar.logbuf + elemSize * j,
+		        nCopied * elemSize);
+		memcpy(lvar.logbuf + elemSize * j, robj.logbuf, robj.nSamples * elemSize);
 	}
 	else if (lhs_index.nSamples == robj.nSamples) {
 		if (contig)
-			memmove(lvar.logbuf + lvar.bufBlockSize * ((uint64_t)lhs_index.buf[0] - 1), robj.buf, lvar.bufBlockSize * robj.nSamples);
+			memmove(lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[0] - 1), robj.logbuf, elemSize * robj.nSamples);
 		else
 			for (uint64_t k = 0; k < robj.nSamples; k++)
-				lvar.buf[(uint64_t)lhs_index.buf[k] - 1] = robj.buf[k];
+				memcpy(lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[k] - 1),
+				       robj.logbuf + elemSize * k,
+				       elemSize);
 	}
 	else
 		throw exception_etc(*this, pn, "Unexpected case").raise();
@@ -520,30 +532,33 @@ void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, b
 	out.bufBlockSize = obj.bufBlockSize;
 	//allocate the output buffer
 	out.UpdateBuffer(index.nSamples);
-	if (out.bufBlockSize == 1) {
-		if (contig)
-			memmove(out.logbuf + out.bufBlockSize * ((uint64_t)index.buf[0] - 1), obj.buf, out.bufBlockSize * obj.nSamples);
-		else
-			for (uint64_t k = 0; k < index.nSamples; k++)
-				out.strbuf[k] = obj.strbuf[(uint64_t)index.buf[k] - 1];
+	const size_t firstOffset = (size_t)(out.bufBlockSize * ((uint64_t)index.buf[0] - 1));
+	if (contig)
+	{
+		memmove(out.logbuf, obj.logbuf + firstOffset, out.bufBlockSize * index.nSamples);
 	}
-	else {
-		if (contig)
-			memmove(out.logbuf + out.bufBlockSize * ((uint64_t)index.buf[0] - 1), obj.buf, out.bufBlockSize * obj.nSamples);
-		else
-			for (uint64_t k = 0; k < index.nSamples; k++)
-				out.buf[k] = obj.buf[(uint64_t)index.buf[k] - 1];
+	else
+	{
+		for (uint64_t k = 0; k < index.nSamples; k++)
+		{
+			const size_t srcOffset = (size_t)(obj.bufBlockSize * ((uint64_t)index.buf[k] - 1));
+			memcpy(out.logbuf + k * out.bufBlockSize, obj.logbuf + srcOffset, out.bufBlockSize);
+		}
 	}
 	out.nGroups = index.nGroups;
 	if (obj.next) {
 		CSignals sec;
-		sec.UpdateBuffer(index.nSamples);
 		sec.bufType = obj.next->bufType;
+		sec.bufBlockSize = obj.next->bufBlockSize;
+		sec.UpdateBuffer(index.nSamples);
 		if (contig)
-			memmove(sec.logbuf + sec.bufBlockSize * ((uint64_t)index.buf[0] - 1), obj.next->buf, sec.bufBlockSize * obj.next->nSamples);
+			memmove(sec.logbuf, obj.next->logbuf + firstOffset, sec.bufBlockSize * index.nSamples);
 		else
 			for (uint64_t k = 0; k < index.nSamples; k++)
-				sec.buf[k] = obj.next->buf[(uint64_t)index.buf[k] - 1];
+			{
+				const size_t srcOffset = (size_t)(sec.bufBlockSize * ((uint64_t)index.buf[k] - 1));
+				memcpy(sec.logbuf + k * sec.bufBlockSize, obj.next->logbuf + srcOffset, sec.bufBlockSize);
+			}
 		out.SetNextChan(sec);
 	}
 }

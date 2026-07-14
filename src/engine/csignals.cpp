@@ -825,7 +825,7 @@ body& body::replacebyindex(unsigned int id0, unsigned int len, const body & RHS)
 	{
 		bool* newbuf = new bool[(nSamples + RHS.nSamples - len) * bufBlockSize];
 		memcpy(newbuf, logbuf, id0* bufBlockSize);
-		memcpy(newbuf + id0 * bufBlockSize, RHS.buf, RHS.nSamples * bufBlockSize);
+		memcpy(newbuf + id0 * bufBlockSize, RHS.logbuf, RHS.nSamples * bufBlockSize);
 		memcpy(newbuf + (id0 + RHS.nSamples) * bufBlockSize, logbuf + (id0 + len) * bufBlockSize, (nSamples - id0 - len) * bufBlockSize);
 		nSamples += RHS.nSamples - len;
 		delete[] buf;
@@ -833,7 +833,7 @@ body& body::replacebyindex(unsigned int id0, unsigned int len, const body & RHS)
 	}
 	else
 	{
-		memmove(logbuf + id0 * bufBlockSize, RHS.buf, RHS.nSamples * bufBlockSize);
+		memmove(logbuf + id0 * bufBlockSize, RHS.logbuf, RHS.nSamples * bufBlockSize);
 		if (RHS.nSamples != len)
 			memmove(logbuf + (id0 + RHS.nSamples) * bufBlockSize, logbuf + (id0 + len) * bufBlockSize, (nSamples - id0 - len) * bufBlockSize);
 		nSamples += RHS.nSamples - len;

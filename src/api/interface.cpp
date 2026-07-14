@@ -1622,6 +1622,15 @@ auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act)
     }
 }
 
+const char* aux_get_status_message(auxContext* ctx)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame || !frame->pEnv) {
+        return nullptr;
+    }
+    return frame->statusMsg.empty() ? nullptr : frame->statusMsg.c_str();
+}
+
 int aux_poll_async(auxContext* ctx)
 {
     AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);

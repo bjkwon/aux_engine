@@ -94,8 +94,8 @@ void AuxScope::HandleMathFunc(string& fname, const body& arg)
 	complex<auxtype>(*cfn2)(complex<auxtype>, complex<auxtype>) = NULL;
 	if (fname == "abs")
 	{
-		if (Sig.IsComplex())		cfn0 = cmpabs, Sig.each(cfn0);
-		else						fn1 = fabs, Sig.each(fn1);
+		if (Sig.IsComplex())		cfn0 = cmpabs;
+		else						fn1 = fabs;
 	}
 	else if (fname == "conj") { if (Sig.IsComplex()) cfn1 = cmpconj; 	else	fn1 = fabs; }
 	else if (fname == "real") { if (Sig.IsComplex()) cfn0 = cmpreal; 	else fn1 = aux_passthru; }
@@ -179,6 +179,16 @@ void AuxScope::HandleMathFunc(string& fname, const body& arg)
 		}
 		else
 			Sig.each(fn1);
+		return;
+	}
+	if (cfn0)
+	{
+		Sig.each(cfn0);
+		return;
+	}
+	if (cfn1)
+	{
+		Sig.each(cfn1);
 		return;
 	}
 	Sig.each(fn1);
