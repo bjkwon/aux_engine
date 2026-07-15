@@ -34,7 +34,7 @@ CVar* EngineRuntime::BLOCK(AuxScope* psk, const AstNode* pnode)
 CVar* EngineRuntime::FOR(AuxScope* psk, const AstNode* pnode)
 {
 	AstNode* p = pnode->child;
-	psk->fExit = psk->fBreak = false;
+	psk->fExit = psk->fBreak = psk->fContinue = false;
 	CVar isig = psk->Compute(p->child);
 	//isig must be a vector
 	ensureVector3(*psk, p, isig, "For-loop index variable must be a vector.");
@@ -77,6 +77,7 @@ CVar* EngineRuntime::FOR(AuxScope* psk, const AstNode* pnode)
 			psk->u.debug_for_count.erase(pnode);
 		}
 		psk->fBreak = false;
+		psk->fContinue = false;
 		return &psk->Sig;
 	}
 	psk->u.debug_for_index.erase(pnode);
@@ -101,8 +102,10 @@ CVar* EngineRuntime::FOR(AuxScope* psk, const AstNode* pnode)
 		// 1) When running in a debugger, it must go through N_BLOCK
 		// 2) check if looping through pa->next is bullet-proof
 		psk->linebyline(pnode->alt->next);
+		psk->fContinue = false;
 	}
 	psk->fBreak = false;
+	psk->fContinue = false;
 	return &psk->Sig;
 }
 
@@ -131,7 +134,7 @@ CVar* EngineRuntime::IF(AuxScope* psk, const AstNode* pnode)
 CVar* EngineRuntime::WHILE(AuxScope* psk, const AstNode* pnode)
 {
 	AstNode* p = pnode->child;
-	psk->fExit = psk->fBreak = false;
+	psk->fExit = psk->fBreak = psk->fContinue = false;
 	const bool step_mode = (psk->u.debugstatus == step || psk->u.debugstatus == step_in);
 	if (step_mode)
 	{
@@ -156,10 +159,13 @@ CVar* EngineRuntime::WHILE(AuxScope* psk, const AstNode* pnode)
 	}
 	else
 	{
-		while (psk->checkcond(p) && !psk->fExit && !psk->fBreak)
+		while (psk->checkcond(p) && !psk->fExit && !psk->fBreak) {
 			psk->process_statement(pnode->alt);
+			psk->fContinue = false;
+		}
 	}
 	psk->fBreak = false;
+	psk->fContinue = false;
 	return &psk->Sig;
 }
 
@@ -486,6 +492,12 @@ CVar* EngineRuntime::INITCELL(AuxScope* psk, const AstNode* pnode)
 CVar* EngineRuntime::BREAK(AuxScope* psk, const AstNode* pnode)
 {
 	psk->fBreak = true;
+	return &psk->Sig;
+}
+
+CVar* EngineRuntime::CONTINUE(AuxScope* psk, const AstNode* pnode)
+{
+	psk->fContinue = true;
 	return &psk->Sig;
 }
 

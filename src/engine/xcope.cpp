@@ -328,6 +328,9 @@ AuxScope::AuxScope(string instr)
 	done = false;
 	script = instr;
 	nodeAllocated = false;
+	fBreak = false;
+	fContinue = false;
+	fExit = false;
 }
 
 AuxScope::~AuxScope()
@@ -386,6 +389,7 @@ EngineRuntime::EngineRuntime(const int fs)
 	xff['@'] = &EngineRuntime::LEVELAT;
 	xff[N_INITCELL] = &EngineRuntime::INITCELL;
 	xff[T_BREAK] = &EngineRuntime::BREAK;
+	xff[T_CONTINUE] = &EngineRuntime::CONTINUE;
 	xff[T_RETURN] = &EngineRuntime::RETURN;
 
 	type_arith_op.push_back('+');
@@ -587,6 +591,7 @@ vector<CVar*> AuxScope::Compute()
 		return res;
 	}
 	fBreak = false;
+	fContinue = false;
 	if (node->type == N_BLOCK) {
 		AstNode* p = node->next;
 		while (p)
@@ -1827,6 +1832,7 @@ void AuxScope::init()
 	done = false;
 	nodeAllocated = false;
 	fBreak = false;
+	fContinue = false;
 	fExit = false;
 	
 	pLast = NULL;

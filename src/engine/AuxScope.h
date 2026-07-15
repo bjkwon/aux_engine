@@ -230,6 +230,7 @@ public:
 	CVar* LEVELAT(AuxScope* psk, const AstNode* pnode);
 	CVar* INITCELL(AuxScope* psk, const AstNode* pnode);
 	CVar* BREAK(AuxScope* psk, const AstNode* pnode);
+	CVar* CONTINUE(AuxScope* psk, const AstNode* pnode);
 	CVar* RETURN(AuxScope* psk, const AstNode* pnode);
 };
 
@@ -355,6 +356,7 @@ public:
 	int drain_async_jobs();
 
 	bool fBreak;
+	bool fContinue;
 	bool fExit;
 
 	bool get_nodes_left_right_sides(const AstNode* pnode, const AstNode** plhs, const AstNode** prhs);
