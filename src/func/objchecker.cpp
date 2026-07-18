@@ -22,32 +22,35 @@ Cfunction set_builtin_function_objchecker(fGate fp)
 void _objchecker(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	auto tp = past->Sig.type();
+	auto set_logical = [&](bool value) {
+		past->Sig.SetValue(value ? 1.0 : 0.0);
+		past->Sig.MakeLogical();
+	};
 	if (!strcmp(pnode->str, "isempty")) {
-		past->Sig.SetValue(past->Sig.IsEmpty());
+		set_logical(past->Sig.IsEmpty());
 	}
 	else if (!strcmp(pnode->str, "isaudio")) {
-		past->Sig.SetValue(ISAUDIO(tp));
+		set_logical(ISAUDIO(tp));
 	}
 	else if (!strcmp(pnode->str, "isvector")) {
-		past->Sig.SetValue(ISVECTOR(tp));
+		set_logical(ISVECTOR(tp));
 	}
 	else if (!strcmp(pnode->str, "isstring")) {
-		past->Sig.SetValue(ISSTRING(tp));
+		set_logical(ISSTRING(tp));
 	}
 	else if (!strcmp(pnode->str, "isstereo")) {
-		past->Sig.SetValue(ISSTEREO(tp));
+		set_logical(ISSTEREO(tp));
 	}
 	else if (!strcmp(pnode->str, "isbool")) {
-		past->Sig.SetValue(ISBOOL(tp));
+		set_logical(ISBOOL(tp));
 	}
 	else if (!strcmp(pnode->str, "iscell")) {
-		past->Sig.SetValue(Cfunction::IsCell(tp));
+		set_logical(Cfunction::IsCell(tp));
 	}
 	else if (!strcmp(pnode->str, "isclass")) {
-		past->Sig.SetValue(ISSTRUT(tp));
+		set_logical(ISSTRUT(tp));
 	}
 	else if (!strcmp(pnode->str, "istseq")) {
-		past->Sig.SetValue(ISTEMPORAL(tp));
+		set_logical(ISTEMPORAL(tp));
 	}
 }
-
