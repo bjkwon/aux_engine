@@ -65,23 +65,31 @@ Cfunction set_builtin_function_buffer(fGate fp)
 	return ft;
 }
 
+static CTimeSeries group_buffer(const auxtype* buf, uint64_t len, int nGroups, int overlap, int fs)
+{
+	CTimeSeries out(fs);
+	const uint64_t numerator = len + (uint64_t)overlap * (uint64_t)(nGroups - 1);
+	const uint64_t groupLen = (numerator + (uint64_t)nGroups - 1) / (uint64_t)nGroups;
+	out.UpdateBuffer(groupLen * (uint64_t)nGroups);
+	out.nGroups = (unsigned int)nGroups;
+	for (int k = 0; k < nGroups; k++)
+	{
+		const uint64_t srcOffset = (uint64_t)k * (groupLen - (uint64_t)overlap);
+		const uint64_t nCopy = (srcOffset < len) ? min(groupLen, len - srcOffset) : 0;
+		if (nCopy > 0)
+			memcpy(out.buf + (uint64_t)k * groupLen, buf + srcOffset, nCopy * sizeof(auxtype));
+	}
+	return out;
+}
+
 CSignal __group(auxtype* buf, unsigned int len, void* pargin, void* pargout)
 {
+	(void)pargout;
 	auto in = *(vector<CVar>*)pargin;
+	int nGroups = (int)in[0].value();
+	int overlap = (int)in[1].value();
 	int fs = (int)in[2].value();
-	CSignal out(fs);
-	auxtype val = in[0].value();
-	auxtype rem = fmod(len, val);
-	if (rem > 0)
-	{
-		unsigned int nPtsNeeded = (unsigned int)(val - rem);
-		out.UpdateBuffer(len + nPtsNeeded);
-	}
-	else
-		out.UpdateBuffer(len);
-	out.nGroups = (unsigned int)val;
-	memcpy(out.buf, buf, len * sizeof(auxtype));
-	return out;
+	return group_buffer(buf, len, nGroups, overlap, fs);
 }
 
 void _group(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
@@ -91,13 +99,24 @@ void _group(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		exception_func(*past, pnode, "argument must be an integer.", "group", 2).raise();
 	if (args[1].value() != (auxtype)(int)args[1].value())
 		exception_func(*past, pnode, "argument must be an integer.", "group", 3).raise();
+	int nGroups = (int)val;
 	int overlap = (int)args[1].value();
-	auxtype nCols = past->Sig.nSamples / val;
+	if (nGroups < 1)
+		exception_func(*past, pnode, "The row/group count must be a positive integer.", "group", 2).raise();
+	if (overlap < 0)
+		exception_func(*past, pnode, "Overlap must be a non-negative integer.", "group", 3).raise();
 	auto tp = past->Sig.type();
+	const uint64_t paddedNumerator = past->Sig.nSamples + (uint64_t)overlap * (uint64_t)(nGroups - 1);
+	const uint64_t paddedNCols = (paddedNumerator + (uint64_t)nGroups - 1) / (uint64_t)nGroups;
+	if (overlap > 0 && (uint64_t)overlap > paddedNCols)
+		exception_func(*past, pnode, "Overlap cannot exceed the size on the row/group.", "group", 3).raise();
 	if (ISSCALAR(tp) || ISVECTOR(tp))
 	{
-		if (past->Sig.nSamples / val != (int)nCols)
-			exception_func(*past, pnode, "The length of array must be divisible by the requested the row count.", "group").raise();
+		const uint64_t numerator = past->Sig.nSamples + (uint64_t)overlap * (uint64_t)(nGroups - 1);
+		if (numerator % (uint64_t)nGroups != 0)
+			exception_func(*past, pnode, "The length of array must be compatible with the requested row count and overlap.", "group").raise();
+		if (overlap > 0)
+			past->Sig = CSignals(group_buffer(past->Sig.buf, past->Sig.nSamples, nGroups, overlap, past->Sig.GetFs()));
 	}
 	else
 	{
@@ -114,7 +133,7 @@ void _group(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			p->nGroups = (int)val;
 	}
 	//
-	past->Sig.nGroups = (int)val;
+	past->Sig.nGroups = (int)nGroups;
 	if (!strcmp(pnode->str, "matrix"))
 		past->statusMsg = "(NOTE) matrix() is superseded by group() and will be removed in future versions.";
 }
@@ -196,24 +215,20 @@ void _ungroup(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	auxtype _overlap = args[0].value();
 	if (_overlap != (auxtype)(int)_overlap)
 		exception_func(*past, pnode, "argument must be an integer.", "group", 1).raise();
-	auto tp = past->Sig.type();
 	auto overlap = (int)_overlap;
 	if (_overlap > 0. && overlap > past->Sig.Len())
-	exception_func(*past, pnode, "Overlap cannot exceed the size on the row/group.", "group", 2).raise();
+		exception_func(*past, pnode, "Overlap cannot exceed the size on the row/group.", "group", 2).raise();
 	CVar out(past->Sig.GetFs());
-	out.UpdateBuffer(past->Sig.nSamples - overlap * (past->Sig.nGroups - 1));
 	auto blocklen = past->Sig.Len();
-	int id = 0;
-	int nMoves = blocklen;
+	out.UpdateBuffer(past->Sig.nSamples - (uint64_t)overlap * (past->Sig.nGroups - 1));
+	uint64_t id = 0;
 	for (unsigned int k = 0, id2 = 0; k < past->Sig.nGroups; k++)
 	{
-		if (k>0) nMoves = blocklen - overlap;
-		memmove(out.buf + id, past->Sig.buf + id2, past->Sig.bufBlockSize * nMoves);
+		const uint64_t skip = k == 0 ? 0 : (uint64_t)overlap;
+		const uint64_t nMoves = blocklen - skip;
+		memmove(out.logbuf + id * past->Sig.bufBlockSize, past->Sig.logbuf + (id2 + skip) * past->Sig.bufBlockSize, past->Sig.bufBlockSize * nMoves);
 		id += nMoves;
-		id2 += nMoves;
-		id -= overlap;
-		for (int m = 0; m < overlap && id2 < past->Sig.nSamples; m++)
-			out.buf[id++] += past->Sig.buf[id2++];
+		id2 += blocklen;
 	}
 	past->Sig = out;
 }
