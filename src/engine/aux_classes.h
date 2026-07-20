@@ -353,7 +353,7 @@ protected:
 	CSignal & operator|(double v); // scale operator (relative)
 	CSignal & operator|(const CSignal & RMS2adjust);
 	CSignal & operator*(pair<vector<double>, vector<double>> coef);
-	pair<unsigned int, uint64_t> grid() const {	return make_pair((unsigned int)round(tmark*fs/1000.), nSamples-1+ (uint64_t)round(tmark*fs / 1000.));	};
+	pair<int64_t, int64_t> grid() const { const int64_t first = (int64_t)round(tmark * fs / 1000.); return make_pair(first, first + (int64_t)nSamples - 1); };
 	bool overlap(const CSignal &sec);
 	function<auxtype(auxtype)> op;
 	function<auxtype(auxtype)> op1(auxtype me) { return [me](auxtype you) {return me + you; }; };

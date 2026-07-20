@@ -1750,6 +1750,8 @@ CTimeSeries& CTimeSeries::operator>>=(double delta)
 
 CTimeSeries& CTimeSeries::AddChain(const CTimeSeries &sec)
 { // MAKE SURE sec is not empty
+	if (sec.nSamples == 0 && !sec.chain)
+		return *this;
 	auto tp = type();
 	if ( tp == TYPEBIT_NULL || tp == TYPEBIT_SIZE1) // NULL or empty string
 		return *this = sec;

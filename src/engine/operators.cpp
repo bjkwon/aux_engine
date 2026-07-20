@@ -24,6 +24,8 @@ bool CSignal::overlap(const CSignal &sec)
 int CSignal::operator_prep(const CSignal& sec, uint64_t &idx4op1, uint64_t &idx4op2, uint64_t &offset)
 {//The case of scalar sec is handled separately. Here we only separately allow the case of *this scalar.
 	if (nSamples > 1 && fs != sec.fs) throw "Both operands must have the same fs.";
+	if (nSamples == 0 || sec.nSamples == 0)
+		return 0;
 	// if this and sec are do not overlap, return here
 	// Special case of non-overlapping--when the two grids are adjacent, should be treated as if they overlapped.
 	if (sec.grid().first > grid().second + 1 || sec.grid().second + 1< grid().first)
@@ -34,13 +36,13 @@ int CSignal::operator_prep(const CSignal& sec, uint64_t &idx4op1, uint64_t &idx4
 	auto f2 = sec.grid().second;
 	uint64_t offset2copy = 0, count2add = 0;
 	if (f1 < f2)
-		count2add += f2 - f1;
+		count2add += (uint64_t)(f2 - f1);
 	if (i2 < i1)
 	{
-		count2add += (offset2copy = i1 - i2);
+		count2add += (offset2copy = (uint64_t)(i1 - i2));
 		tmark = sec.tmark;
 	}
-	UpdateBuffer(nSamples + count2add, offset2copy);
+	UpdateBuffer((uint64_t)nSamples + count2add, offset2copy);
 	nGroups = sec.nGroups;
 	if (i1 == 0 && i2 == 0 && f2 == 0)
 	{
@@ -49,17 +51,17 @@ int CSignal::operator_prep(const CSignal& sec, uint64_t &idx4op1, uint64_t &idx4
 	}
 	if (i2 < i1)
 	{
-		memcpy(buf, sec.buf, (i1 - i2)*bufBlockSize);
-		offset = (idx4op1 = i1 - i2) ;
+		memcpy(buf, sec.buf, (uint64_t)(i1 - i2)*bufBlockSize);
+		offset = (idx4op1 = (uint64_t)(i1 - i2)) ;
 	}
 	else
 	{
 		offset = 0;
-		idx4op1 = i2 - i1;
+		idx4op1 = (uint64_t)(i2 - i1);
 	}
-	idx4op2 = min(f1, f2) - min(i1, i2) + 1;
+	idx4op2 = (uint64_t)(min(f1, f2) - min(i1, i2) + 1);
 	if (f1 < f2)
-		memcpy(buf + idx4op2, sec.buf + f1 - i2 + 1, (f2 - f1)*bufBlockSize);
+		memcpy(buf + idx4op2, sec.buf + (uint64_t)(f1 - i2 + 1), (uint64_t)(f2 - f1)*bufBlockSize);
 	return 1;
 }
 
@@ -275,7 +277,8 @@ bool CTimeSeries::operate(const CTimeSeries& sec, char op)
 		checker = false;
 	}
 	for (auto q : sec_chains)
-		AddChain(*q);
+		if (q->nSamples > 0 || q->chain)
+			AddChain(*q);
 	// Unite overlapping chains
 	for (CTimeSeries *q = this; q; /*q = q->chain; -->shouldn't be here because p can be removed from the chain*/)
 	{

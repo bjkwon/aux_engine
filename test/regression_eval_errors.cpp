@@ -393,6 +393,33 @@ static bool case_continue_skips_remaining_loop_body(std::string& err) {
   return true;
 }
 
+static bool case_long_stereo_plus_short_shifted_stereo(std::string& err) {
+  Session s("case_long_stereo_plus_short_shifted_stereo");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(2000); silence(2000)]", "long stereo setup") ||
+      !expect_eval_ok(s, "noi=silence(600)", "short noise setup") ||
+      !expect_eval_ok(s, "noi2=silence(600)", "short noise2 setup") ||
+      !expect_eval_ok(s, "x2=x+([(noi+noi2)@-15;]>>600)", "long stereo plus shifted short stereo")) {
+    err = s.err;
+    return false;
+  }
+  AuxObj x2 = aux_get_var(s.ctx, "x2");
+  if (!x2 || !aux_is_audio(x2)) {
+    err = "x2 should be stereo audio.";
+    return false;
+  }
+  const size_t leftLen = aux_flatten_channel_length(x2, 0);
+  const size_t rightLen = aux_flatten_channel_length(x2, 1);
+  const size_t expectedLen = static_cast<size_t>(std::lround(2000.0 / 1000.0 * s.cfg.sample_rate));
+  if (leftLen != expectedLen || rightLen != expectedLen) {
+    err = "Unexpected x2 channel lengths: left=" + std::to_string(leftLen) +
+          ", right=" + std::to_string(rightLen) +
+          ", expected=" + std::to_string(expectedLen);
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct TestCase {
     const char* name;
@@ -412,6 +439,7 @@ int main() {
     {"case_complex_fft_index_extract_preserves_bins", case_complex_fft_index_extract_preserves_bins},
     {"case_complex_indexed_write_preserves_real_and_imag", case_complex_indexed_write_preserves_real_and_imag},
     {"case_continue_skips_remaining_loop_body", case_continue_skips_remaining_loop_body},
+    {"case_long_stereo_plus_short_shifted_stereo", case_long_stereo_plus_short_shifted_stereo},
   };
 
   bool ok = true;
