@@ -420,6 +420,113 @@ static bool case_long_stereo_plus_short_shifted_stereo(std::string& err) {
   return true;
 }
 
+static bool expect_channel_values(Session& s, const std::string& varName, int channel_index,
+                                   const std::vector<double>& expected, double tol, std::string& err) {
+  AuxObj obj = aux_get_var(s.ctx, varName);
+  if (!obj) { err = "Variable not found: " + varName; return false; }
+  const size_t len = aux_flatten_channel_length(obj, channel_index);
+  if (len < expected.size()) {
+    err = "Channel " + std::to_string(channel_index) + " of " + varName + " too short: " + std::to_string(len);
+    return false;
+  }
+  std::vector<double> vals(len, 0.0);
+  if (aux_flatten_channel(obj, channel_index, vals.data(), vals.size()) != len) {
+    err = "aux_flatten_channel failed for " + varName + " channel " + std::to_string(channel_index);
+    return false;
+  }
+  for (size_t i = 0; i < expected.size(); ++i) {
+    if (std::fabs(vals[i] - expected[i]) > tol) {
+      err = varName + " channel " + std::to_string(channel_index) + " sample " + std::to_string(i) +
+            ": got " + std::to_string(vals[i]) + ", expected " + std::to_string(expected[i]);
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool case_channel_left_numeric_range_write_scoped(std::string& err) {
+  Session s("case_channel_left_numeric_range_write_scoped");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(1000); silence(1000)]", "stereo silence setup") ||
+      !expect_eval_ok(s, "x.left(1:5)=0.5", "x.left(1:5)=0.5")) {
+    err = s.err;
+    return false;
+  }
+  if (!expect_channel_values(s, "x", 0, {0.5, 0.5, 0.5, 0.5, 0.5, 0.0, 0.0}, 1e-9, err))
+    return false;
+  if (!expect_channel_values(s, "x", 1, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, 1e-9, err))
+    return false;
+  return true;
+}
+
+static bool case_channel_right_numeric_range_write_scoped(std::string& err) {
+  Session s("case_channel_right_numeric_range_write_scoped");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(1000); silence(1000)]", "stereo silence setup") ||
+      !expect_eval_ok(s, "x.right(1:5)=0.5", "x.right(1:5)=0.5")) {
+    err = s.err;
+    return false;
+  }
+  if (!expect_channel_values(s, "x", 1, {0.5, 0.5, 0.5, 0.5, 0.5, 0.0, 0.0}, 1e-9, err))
+    return false;
+  if (!expect_channel_values(s, "x", 0, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, 1e-9, err))
+    return false;
+  return true;
+}
+
+static bool case_channel_left_time_range_write_scoped(std::string& err) {
+  Session s("case_channel_left_time_range_write_scoped");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(1000); silence(1000)]", "stereo silence setup") ||
+      !expect_eval_ok(s, "x.left(0~.01)=noise(10)", "x.left(0~.01)=noise(10)")) {
+    err = s.err;
+    return false;
+  }
+  AuxObj obj = aux_get_var(s.ctx, "x");
+  if (!obj) { err = "Variable not found: x"; return false; }
+  const size_t leftLen = aux_flatten_channel_length(obj, 0);
+  std::vector<double> left(leftLen, 0.0);
+  aux_flatten_channel(obj, 0, left.data(), left.size());
+  bool anyNonzero = false;
+  for (double v : left) if (std::fabs(v) > 1e-9) { anyNonzero = true; break; }
+  if (!anyNonzero) {
+    err = "Expected some left-channel samples to be nonzero after x.left(0~.01)=noise(10)";
+    return false;
+  }
+  const size_t rightLen = aux_flatten_channel_length(obj, 1);
+  std::vector<double> right(rightLen, 0.0);
+  aux_flatten_channel(obj, 1, right.data(), right.size());
+  for (double v : right) {
+    if (std::fabs(v) > 1e-9) {
+      err = "Right channel should remain untouched (silence) after x.left(...)=... write.";
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool case_channel_write_requires_stereo(std::string& err) {
+  Session s("case_channel_write_requires_stereo");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=silence(500)", "mono silence setup") ||
+      !expect_eval_error(s, "x.left(1:5)=0.5", "x.left(1:5)=0.5 on mono x")) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_channel_write_requires_index(std::string& err) {
+  Session s("case_channel_write_requires_index");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(500); silence(500)]", "stereo silence setup") ||
+      !expect_eval_error(s, "x.left=0.5", "bare x.left=0.5")) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct TestCase {
     const char* name;
@@ -440,6 +547,11 @@ int main() {
     {"case_complex_indexed_write_preserves_real_and_imag", case_complex_indexed_write_preserves_real_and_imag},
     {"case_continue_skips_remaining_loop_body", case_continue_skips_remaining_loop_body},
     {"case_long_stereo_plus_short_shifted_stereo", case_long_stereo_plus_short_shifted_stereo},
+    {"case_channel_left_numeric_range_write_scoped", case_channel_left_numeric_range_write_scoped},
+    {"case_channel_right_numeric_range_write_scoped", case_channel_right_numeric_range_write_scoped},
+    {"case_channel_left_time_range_write_scoped", case_channel_left_time_range_write_scoped},
+    {"case_channel_write_requires_stereo", case_channel_write_requires_stereo},
+    {"case_channel_write_requires_index", case_channel_write_requires_index},
   };
 
   bool ok = true;

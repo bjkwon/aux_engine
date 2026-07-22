@@ -365,6 +365,11 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
 				return;
 			}
 			pvarLHS = struct_item;
+			// Advance plhs past the resolved struct/channel-selector chain now, before the
+			// CELL/type-check/N_TIME_EXTRACT dispatch below, so those checks see the actual
+			// following node (e.g. N_TIME_EXTRACT) instead of the N_STRUCT link itself.
+			// pstruct->alt is guaranteed non-null here (checked above).
+			plhs = pstruct;
 		}
 		typelhs = pvarLHS->type();
 		if ((typelhs & TYPEBIT_CELL)) {
@@ -380,7 +385,12 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
             const bool indexedElementWrite = plhs->alt &&
                                              plhs->alt->type != N_STRUCT &&
                                              plhs->alt->type != N_TIME_EXTRACT;
-            const uint16_t typeMask = indexedElementWrite ? (uint16_t)0xFFF0 : (uint16_t)0xFFF4;
+            uint16_t typeMask = indexedElementWrite ? (uint16_t)0xFFF0 : (uint16_t)0xFFF4;
+            // A .left/.right-scoped LHS write always compares as mono: pvarLHS may still be the
+            // whole (genuinely stereo) variable itself (see get_available_struct_item), so its
+            // type() carries TYPEBIT_MULTICHANS even though only one channel is being written.
+            if (channelWriteSel)
+                typeMask &= (uint16_t)~TYPEBIT_MULTICHANS;
             if (typerhs > 0 && plhs->alt->type != N_STRUCT && (typelhs & typeMask) != (typerhs & typeMask)) {
                 if (!ISAUDIO(typelhs) || !ISAUDIO(typerhs)) // if one is single chain audio and the other is chained audio, it should't throw
                     throw exception_etc(*this, plhs, "LHS and RHS have different object type.").raise();
@@ -397,13 +407,6 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
 			if (pvarLHS->next)
 				lhs_index.SetNextChan(gettimepoints(pvarLHS->next, plhs->alt));
 			return;
-		}
-		// if pstruct is not NULL, .prop is being checked 
-		if (pstruct) {
-			if (pstruct->alt)
-				plhs = pstruct;
-			else
-				return;
 		}
 		// x(ind): process ind
 		eval_index(plhs->alt->child, *pvarLHS, lhs_index);
@@ -451,6 +454,7 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 { // x.p1 defined, but the statement is x.q = RHS --> OK, but x.q(2) = RHS --> NOT OK, throw here
 	CVar* pvarLHS = NULL;
 	*pstruct = plhs;
+	channelWriteSel = 0;
 	auto it = Vars.find(plhs->str);
 	if (it != Vars.end()) {
 		map<std::string, CVar>::iterator itvar;
@@ -458,6 +462,22 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 			*pstruct = plhs->alt;
 			itvar = ((CVar*)pvarLHS)->strut.find(plhs->alt->str);
 			if (itvar == pvarLHS->strut.end()) {
+				bool wantRight = !strcmp(plhs->alt->str, "right");
+				if (ISAUDIO(pvarLHS->type()) && (wantRight || !strcmp(plhs->alt->str, "left"))) {
+					// .left/.right on the LHS select a single channel to write into directly
+					// (not a copy, unlike the read-side left()/right() builtins which mutate Sig).
+					if (!plhs->alt->alt)
+						throw exception_etc(*this, plhs, string(".") + plhs->alt->str + " must be used with an index on the LHS, e.g. x." + plhs->alt->str + "(t1~t2) = ...").raise();
+					if (!pvarLHS->next)
+						throw exception_etc(*this, plhs, string(".") + plhs->alt->str + " requires a stereo signal.").raise();
+					// Keep pvarLHS pointing at the whole (real) stereo CVar, for both .left and .right:
+					// pvarLHS->next is allocated as a plain CSignals (see SetNextChan), not a CVar, so
+					// it must never be reinterpreted as a CVar*. Length/endpoint/type computations use
+					// pvarLHS as-is (left and right channels share sample count); the actual buffer
+					// write is redirected to the real pvarLHS->next pointer only in adjust_buf/insertreplace.
+					channelWriteSel = wantRight ? 2 : 1;
+					continue;
+				}
 				if (plhs->alt->type==N_STRUCT && plhs->alt->alt && plhs->alt->alt->type == N_ARGS)
 					throw exception_etc(*this, plhs, string("Trying to index an undefined member variable .") + plhs->alt->str  + " on LHS").raise();
 				break;
@@ -473,7 +493,7 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 /* contig: true if a contiguous buffer block is represented by lhs_index
 /* pn: pointer to AstNode, only used for exception handling
 */
-void AuxScope::adjust_buf(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn)
+void AuxScope::adjust_buf(CSignals& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn)
 {
 	const size_t elemSize = lvar.bufBlockSize;
 	if (robj.nSamples == 0)
@@ -571,6 +591,8 @@ void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, b
 void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* plhs, const AstNode* prhs)
 {
 	bool isreplica = prhs != NULL;
+	if (channelWriteSel && isreplica)
+		throw exception_etc(*this, plhs, "Replicator (..) is not yet supported with .left/.right assignment.").raise();
 	if (lhs_index.nSamples == 0)
 	{
 		CVar rhs_eval;
@@ -608,6 +630,11 @@ void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool
 			adjust_buf(lvar, lhs_index, Compute(prhs), contig, pn);
 			replica.Reset();
 		}
+		else if (channelWriteSel == 2)
+			// .right-scoped write: redirect to the real next-channel CSignals node directly (never
+			// reinterpreted as a CVar -- see get_available_struct_item), leaving lvar's own primary
+			// channel data untouched.
+			adjust_buf(*lvar.next, lhs_index, robj, contig, pn);
 		else
 			adjust_buf(lvar, lhs_index, robj, contig, pn);
 	}
@@ -771,10 +798,19 @@ void AuxScope::insertreplace(const AstNode* plhs, const CVar& robj, const CVar& 
 	if ((p->alt && p->alt->type == N_TIME_EXTRACT) || // x{id}(t1~t2) = ...sqrt
 		p->type == N_TIME_EXTRACT || (p->next && p->next->type == N_IDLIST))  // s(repl_RHS1~repl_RHS2)   or  cel{n}(repl_RHS1~repl_RHS2)
 	{
+		// (channelWriteSel && isreplica) is already rejected in mod_sig before insertreplace is called.
 		if (isreplica) // direct update of buf
 		{
 			replace(*lobj, indsig, robj, *this, plhs);
 		}
+		else if (channelWriteSel)
+			// .left/.right-scoped write: lobj is always the whole stereo variable itself (see
+			// get_available_struct_item), and lobj->next is the real *other* channel of that same
+			// variable (not a copy) -- whichever side isn't targeted must stay untouched. Bypass
+			// CSignals::ReplaceBetweenTPs (which fans a mono RHS out to both channels) and call the
+			// base CTimeSeries implementation directly on just the targeted channel's CSignals node.
+			// (lobj->next is a plain CSignals*, never a CVar*, so it's used as CTimeSeries* only.)
+			((CTimeSeries*)(channelWriteSel == 2 ? lobj->next : lobj))->CTimeSeries::ReplaceBetweenTPs(robj, indsig.buf[0], indsig.buf[1]);
 		else
 			lobj->ReplaceBetweenTPs(robj, indsig);
 	}

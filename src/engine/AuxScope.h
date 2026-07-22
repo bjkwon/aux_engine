@@ -352,6 +352,7 @@ public:
 	string statusMsg; // to display any message during processing (e.g., "Sampling rate set to 22050 Hz" "This function will be obsolete.")
 	unsigned long Tick0, Tick1;
 	vector<float> ends;
+	int channelWriteSel = 0; // 0=whole object, 1=.left-scoped, 2=.right-scoped write target (set by get_available_struct_item, consumed by insertreplace)
 	CVar* process_statement(const AstNode* pnode);
 	int drain_async_jobs();
 
@@ -373,7 +374,7 @@ private:
 	void eval_index(const AstNode* pInd, const CVar& varLHS, CVar& index);
 	void insertreplace(const AstNode* pnode, const CVar& sec, const CVar& indsig, CVar* lobj, bool isreplica);
 	const CVar* get_cell_item(const AstNode* plhs, const CVar& cellobj);
-	void adjust_buf(CVar& lobj, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn);
+	void adjust_buf(CSignals& lobj, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn);
 	void assign_struct(CVar* lobj, const AstNode* plhs, const AstNode* pstruct, const CVar& robj);
 	CVar* get_available_struct_item(const AstNode* plhs, const AstNode** pstruct);
 	void sanitize_cell_node(const AstNode* p);

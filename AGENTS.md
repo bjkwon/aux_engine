@@ -62,6 +62,8 @@ There is no repository-wide formatter or lint target. Match surrounding style an
 - Runtime handle values use `TYPEBIT_HANDLE` and `ISHANDLE`. Older internal names such as `struts`, `GOvars`, and `IsGO()` still exist; do not mechanically rename them without checking handle/reference semantics.
 - `TYPEBIT_STRUT` is value-like struct data. `TYPEBIT_HANDLE` is reference-like identity/alias data. Preserve that distinction in assignment, property access, deletion, and preview paths.
 - `fget` returns raw byte objects from local paths or HTTP(S) sources. See `docs/fget.md` before changing file/URL byte-fetch behavior.
+- A stereo `CSignals`'s second channel (`next`) is allocated as a plain `CSignals`, not a `CVar` (see `SetNextChan`). Never reinterpret-cast a `next` pointer to `CVar*`; only call `CSignals`/`CTimeSeries` members on it directly. See `docs/channel_indexing.md`.
+- LHS chain-walkers (`get_available_struct_item`, `eval_lhs`) must stay compositional with the read-side chain-walker (`read_node`): an intermediate dot-suffix that resolves to a builtin dispatch (e.g. `.left`/`.right`) must not be silently dropped or misread as an undefined struct member.
 
 ## Coding Conventions
 
@@ -109,5 +111,6 @@ There is no repository-wide formatter or lint target. Match surrounding style an
 - `GRAPHICS_RUNTIME_BACKEND_SPLIT.md`: authoritative boundary between runtime graphics semantics and GUI rendering.
 - `GRAPHICS_MIGRATION_ROADMAP.md`: graphics migration direction and success criteria; verify current implementation before treating items as pending.
 - `docs/fget.md`: `fget` source forms, return type, prerequisites, and error behavior.
+- `docs/channel_indexing.md`: `.left(...)`/`.right(...)` channel-scoped assignment syntax, semantics, and errors.
 - `/Users/bkwon/dev/auxlab2/GRAPHICS_HANDLE_IMPLEMENTATION_PLAN.md`: app-side graphics semantics and manual expectations for GUI behavior.
 - `/Users/bkwon/dev/auxlab2/README.md`, `TEST_PLAN_GRAPHICS_PLAY_RECORD.md`, and `MANUAL_CHECKLIST_AUXLAB2_GRAPHICS_PLAY_RECORD.md`: consult for app-specific graphics/play/record verification. A separate `auxlab2/AGENTS.md` should eventually hold this guidance.
