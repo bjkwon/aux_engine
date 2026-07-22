@@ -23,11 +23,16 @@ This repo contains **auxe**, the C++17 core engine that parses and executes **AU
 - Provides a stable C/C++ API for embedding in UIs
 
 ### What auxe does *not* do
-- No file I/O (no MP3/WAV/AIFF handling)
-- No codec libraries (no libsndfile, mp3lame, mpg123)
+- No general-purpose file I/O beyond the small, fixed allowlist below (no AIFF, FLAC, AAC, Opus, etc.)
+- No system/external codec libraries (no libsndfile, mp3lame, libmpg123) and no patent-encumbered or royalty-bearing codecs
 - No UI logic (no readline, no console state)
 
-File decoding/encoding and persistence are the responsibility of the **UI layer**, which injects data into auxe using engine APIs.
+### Codec policy
+auxe vendors small, permissively-licensed (public domain/MIT-0), dependency-free decoders in-tree for a **fixed, deliberately small allowlist** of common, patent-free formats:
+- **WAV** - hand-rolled PCM/IEEE-float parser (`src/func/_file_wav.*`)
+- **MP3** - vendored `dr_mp3` (`src/third_party/dr_mp3.h`, public domain/MIT-0). MP3's core patents expired in 2017, so there is no royalty/licensing risk in decoding it.
+
+This list is intentionally not meant to grow. Any other format (AIFF, FLAC, AAC, Opus, ...) remains the responsibility of the **UI layer**, which decodes it externally and injects raw PCM + metadata into auxe using engine APIs. Vendored in-tree decoders must stay permissively licensed (public domain, MIT, BSD, or similar) - no GPL/LGPL system codec libraries are linked, keeping auxe's build free of external codec dependencies regardless of auxe's own license.
 
 ---
 
@@ -37,14 +42,14 @@ UI applications interact with auxe using **data blocks + metadata**, not filenam
 
 Typical flow:
 
-1. UI decodes a file (e.g., MP3/WAV) using any library it chooses
-2. UI injects the decoded data into auxe:
+1. For WAV/MP3, the UI can just call `wave()`/`file()` and auxe decodes the file in-engine. For any other format, the UI decodes the file using any library it chooses.
+2. UI injects the decoded data into auxe (directly, or already decoded via `wave()`/`file()`):
    - audio buffers (de-interleaved PCM)
    - sample rate, channel count, timing metadata
 3. AUX scripts operate on the data using engine semantics
 4. UI retrieves results from auxe and decides how to present or save them
 
-This keeps auxe independent of storage formats and preserves the meaning of AUX abstractions (segments, time shifts, chained signals).
+This keeps auxe independent of storage formats outside its small codec allowlist, and preserves the meaning of AUX abstractions (segments, time shifts, chained signals).
 
 ---
 

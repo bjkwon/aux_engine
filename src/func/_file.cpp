@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <string.h> // aux_file
 #include "_file_wav.h"
+#include "_file_mp3.h"
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -1037,6 +1038,62 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		past->Sig.SetFs(envFs);
 	}
 }
+
+void _mp3(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
+{
+	string estr;
+	string filename = past->Sig.str();
+	string sourceName = filename;
+	ScopedTempFile tempMp3File;
+	if (is_remote_url(filename)) {
+		string tempPath;
+		if (!make_temp_remote_path(tempPath, estr))
+			throw exception_etc(past, pnode, estr).raise();
+		if (!download_remote_url_to_file(filename, tempPath, estr))
+			throw exception_etc(past, pnode, estr).raise();
+		tempMp3File.path = tempPath;
+		sourceName = tempPath;
+	}
+	double beginMs = args[0].value();
+	double durMs = args[1].value();
+
+	Mp3Info mp3info;
+	vector<float> buffer;
+	uint64_t framesRead = mp3_read_float32(sourceName, beginMs, durMs, mp3info, buffer, estr);
+	if (!estr.empty())
+		throw exception_etc(past, pnode, estr).raise();
+
+	past->Sig.Reset(mp3info.sample_rate);
+	past->Sig.bufType = 'R';
+	if (mp3info.num_channels == 1)
+	{
+		past->Sig.UpdateBuffer((uint64_t)framesRead);
+		for (uint64_t k = 0; k < framesRead; ++k)
+			past->Sig.buf[k] = buffer[k];
+	}
+	else
+	{
+		auto frames = reinterpret_cast<const float(*)[2]>(buffer.data());
+		past->Sig.next = new CSignals((int)mp3info.sample_rate);
+		past->Sig.UpdateBuffer((int)framesRead);
+		past->Sig.next->UpdateBuffer((int)framesRead);
+		for (uint64_t k = 0; k < framesRead; ++k) {
+			past->Sig.buf[k] = frames[k][0];
+			past->Sig.next->buf[k] = frames[k][1];
+		}
+	}
+	//Resampling if the sampling rate is different from the current environment
+	int envFs = past->GetFs();
+	if (envFs != past->Sig.GetFs()) {
+		CVar ratio(1), argout(1);
+		ratio.SetValue((float)past->Sig.GetFs() / envFs);
+		vector<CVar> arg(1, ratio);
+		past->Sig = past->Sig.evoke_modsig2(__resample, &arg, &argout);
+		if (ISSTRING(argout.type())) // this means there was an error during resample
+			throw exception_etc(*past, pnode, argout.str()).raise();
+		past->Sig.SetFs(envFs);
+	}
+}
 // 0 for error opening file
 // 1 for WAV
 // 2 for MP3
@@ -1110,8 +1167,13 @@ void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		_wave(past, pnode, args);
 		break;
 	case 2:
+		// supplying default args for _mp3()
+		((vector<CVar>*) & args)->push_back(CVar(0.));
+		((vector<CVar>*) & args)->push_back(CVar(-1.));
+		_mp3(past, pnode, args);
+		break;
 	case 3:
-		throw exception_func(*past, pnode, "mp3, aiff files are not supported currently in auxe.").raise();
+		throw exception_func(*past, pnode, "aiff files are not supported currently in auxe.").raise();
 		break;
 	case 4:
 		if (GetFileText(filename.c_str(), "rb", content))

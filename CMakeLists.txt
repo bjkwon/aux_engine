@@ -112,7 +112,13 @@ endif()
 
 # -----------------------------
 # Dependencies
-#   auxe has NO file/codec deps.
+#   auxe has no *external* file/codec deps. WAV and MP3 decoding are
+#   handled in-tree: WAV via a hand-rolled parser, MP3 via a vendored
+#   single-header decoder (dr_mp3, public domain/MIT-0). No system
+#   codec libraries (libmpg123, mp3lame, libsndfile) are linked, and no
+#   patent-encumbered or royalty-bearing codec is used. This is a
+#   deliberately fixed, small allowlist (WAV, MP3) - any other format
+#   remains the UI layer's responsibility (see README).
 #   Required: FFTW3 + libsamplerate
 #   Optional: PortAudio
 # -----------------------------
