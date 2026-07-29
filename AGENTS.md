@@ -13,8 +13,9 @@ Keep `aux_engine` focused on portable runtime semantics. Applications such as `a
 - `src/api/`: public API implementation and preview/echo formatting.
 - `src/func/`: AUX builtins. Add builtin gates here and register them in `src/engine/AuxFunc.cpp` / `src/engine/builtin_functions.h`.
 - `src/iir/`: legacy C IIR/filter math support.
+- `src/third_party/`: vendored single-header dependencies (currently `dr_mp3.h`). Keep additions permissively licensed and dependency-free; do not edit vendored sources locally.
 - `test/`: CTest regression executables and AUX fixtures.
-- `docs/`: detailed feature notes, currently including `fget`.
+- `docs/`: detailed feature notes (`fget`, channel indexing, audio file decoding).
 - `example_apps/aux2/`: console frontend example that embeds `auxe`; keep app-only behavior here rather than in the library.
 
 ## Build And Test
@@ -62,6 +63,8 @@ There is no repository-wide formatter or lint target. Match surrounding style an
 - Runtime handle values use `TYPEBIT_HANDLE` and `ISHANDLE`. Older internal names such as `struts`, `GOvars`, and `IsGO()` still exist; do not mechanically rename them without checking handle/reference semantics.
 - `TYPEBIT_STRUT` is value-like struct data. `TYPEBIT_HANDLE` is reference-like identity/alias data. Preserve that distinction in assignment, property access, deletion, and preview paths.
 - `fget` returns raw byte objects from local paths or HTTP(S) sources. See `docs/fget.md` before changing file/URL byte-fetch behavior.
+- In-engine audio decoding is limited to a fixed allowlist: WAV (hand-rolled parser) and MP3 (vendored `dr_mp3`). No external/system codec library is linked and no patent-encumbered codec is used. Do not extend the allowlist; other formats stay the UI layer's responsibility.
+- MP3 is reachable **only** through `file()` content sniffing, by design. There is intentionally no `mp3()` builtin and `_mp3()` is intentionally unregistered — do not add one. See `docs/audio_file_decoding.md`.
 - A stereo `CSignals`'s second channel (`next`) is allocated as a plain `CSignals`, not a `CVar` (see `SetNextChan`). Never reinterpret-cast a `next` pointer to `CVar*`; only call `CSignals`/`CTimeSeries` members on it directly. See `docs/channel_indexing.md`.
 - LHS chain-walkers (`get_available_struct_item`, `eval_lhs`) must stay compositional with the read-side chain-walker (`read_node`): an intermediate dot-suffix that resolves to a builtin dispatch (e.g. `.left`/`.right`) must not be silently dropped or misread as an undefined struct member.
 
@@ -101,7 +104,7 @@ There is no repository-wide formatter or lint target. Match surrounding style an
 - Do not assume roadmap docs describe the current state; verify against code first.
 - Do not reintroduce `TYPEBIT_STRUTS`; code has moved to `TYPEBIT_HANDLE`.
 - Do not treat all structs as handles or all handles as value structs.
-- Do not add codec/UI dependencies to the core library just to support an app workflow.
+- Do not add codec/UI dependencies to the core library just to support an app workflow. The WAV/MP3 allowlist is the exception, not a precedent: it is satisfied by in-tree, permissively-licensed, dependency-free decoders, and linking an external codec library is still off-limits.
 - Do not edit generated/build artifacts in place to fix source problems.
 
 ## Documents To Consult
@@ -112,5 +115,6 @@ There is no repository-wide formatter or lint target. Match surrounding style an
 - `GRAPHICS_MIGRATION_ROADMAP.md`: graphics migration direction and success criteria; verify current implementation before treating items as pending.
 - `docs/fget.md`: `fget` source forms, return type, prerequisites, and error behavior.
 - `docs/channel_indexing.md`: `.left(...)`/`.right(...)` channel-scoped assignment syntax, semantics, and errors.
+- `docs/audio_file_decoding.md`: codec allowlist and policy, `file()` format sniffing/dispatch, why MP3 has no dedicated builtin, and the `mp3_read_float32` contract.
 - `/Users/bkwon/dev/auxlab2/GRAPHICS_HANDLE_IMPLEMENTATION_PLAN.md`: app-side graphics semantics and manual expectations for GUI behavior.
 - `/Users/bkwon/dev/auxlab2/README.md`, `TEST_PLAN_GRAPHICS_PLAY_RECORD.md`, and `MANUAL_CHECKLIST_AUXLAB2_GRAPHICS_PLAY_RECORD.md`: consult for app-specific graphics/play/record verification. A separate `auxlab2/AGENTS.md` should eventually hold this guidance.
