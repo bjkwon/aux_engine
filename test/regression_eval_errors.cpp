@@ -144,6 +144,29 @@ static bool expect_vector_values(Session& s, const std::string& varName, const s
   return true;
 }
 
+static bool expect_scalar_value(Session& s, const std::string& varName, double expected, double tol = 1e-9) {
+  AuxObj obj = aux_get_var(s.ctx, varName);
+  if (!obj) {
+    s.err = "Variable not found: " + varName;
+    return false;
+  }
+  if (aux_vector_length(obj) != 1) {
+    s.err = "Unexpected scalar length for " + varName + ": got " + std::to_string(aux_vector_length(obj));
+    return false;
+  }
+  double val = 0.0;
+  if (aux_copy_vector(obj, &val, 1) != 1) {
+    s.err = "aux_copy_vector failed for scalar " + varName;
+    return false;
+  }
+  if (std::fabs(val - expected) > tol) {
+    s.err = "Unexpected scalar value for " + varName + ": got " + std::to_string(val) +
+            ", expected " + std::to_string(expected);
+    return false;
+  }
+  return true;
+}
+
 static bool expect_matrix_preview_values(Session& s, const std::string& varName, const std::string& expectedSize, const std::vector<double>& expected, double tol = 1e-9) {
   AuxObj obj = aux_get_var(s.ctx, varName);
   if (!obj) {
@@ -190,6 +213,28 @@ static bool case_empty_index_read_returns_null(std::string& err) {
       !expect_eval_ok(s, "v=[]", "v=[]") ||
       !expect_eval_ok(s, "r=tt(v)", "r=tt(v)") ||
       !expect_var_null(s, "r")) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_zero_arg_parentheses_builtin_and_udf(std::string& err) {
+  Session s("case_zero_arg_parentheses_builtin_and_udf");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!write_file(s.dir / "zeroparen.aux",
+                  "function out = zeroparen\n"
+                  "out = 7\n", s.err) ||
+      !define_register(s, "zeroparen")) { err = s.err; return false; }
+
+  if (!expect_eval_ok(s, "fs1 = getfs", "fs1 = getfs") ||
+      !expect_eval_ok(s, "fs2 = getfs()", "fs2 = getfs()") ||
+      !expect_eval_ok(s, "u1 = zeroparen", "u1 = zeroparen") ||
+      !expect_eval_ok(s, "u2 = zeroparen()", "u2 = zeroparen()") ||
+      !expect_scalar_value(s, "fs1", 22050.0) ||
+      !expect_scalar_value(s, "fs2", 22050.0) ||
+      !expect_scalar_value(s, "u1", 7.0) ||
+      !expect_scalar_value(s, "u2", 7.0)) {
     err = s.err;
     return false;
   }
@@ -505,6 +550,30 @@ static bool case_channel_left_time_range_write_scoped(std::string& err) {
   return true;
 }
 
+static bool case_channel_selector_read_then_index(std::string& err) {
+  Session s("case_channel_selector_read_then_index");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(1000); silence(1000)]", "stereo silence setup") ||
+      !expect_eval_ok(s, "x.left(1:5)=0.5", "x.left(1:5)=0.5") ||
+      !expect_eval_ok(s, "b=x.left(1:5)", "b=x.left(1:5)") ||
+      !expect_vector_values(s, "b", {0.5, 0.5, 0.5, 0.5, 0.5})) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_channel_lhs_rejects_computed_suffix(std::string& err) {
+  Session s("case_channel_lhs_rejects_computed_suffix");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(500); silence(500)]", "stereo silence setup") ||
+      !expect_eval_error(s, "x.left.rms=0.5", "x.left.rms=0.5")) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
 static bool case_channel_write_requires_stereo(std::string& err) {
   Session s("case_channel_write_requires_stereo");
   if (!s.ok()) { err = s.err; return false; }
@@ -561,6 +630,7 @@ int main() {
 
   const TestCase tests[] = {
     {"case_empty_index_read_returns_null", case_empty_index_read_returns_null},
+    {"case_zero_arg_parentheses_builtin_and_udf", case_zero_arg_parentheses_builtin_and_udf},
     {"case_group_overlap_uses_second_method_arg", case_group_overlap_uses_second_method_arg},
     {"case_group_overlap_pads_partial_final_group", case_group_overlap_pads_partial_final_group},
     {"case_ungroup_overlap_reverses_group_overlap", case_ungroup_overlap_reverses_group_overlap},
@@ -576,6 +646,8 @@ int main() {
     {"case_channel_left_numeric_range_write_scoped", case_channel_left_numeric_range_write_scoped},
     {"case_channel_right_numeric_range_write_scoped", case_channel_right_numeric_range_write_scoped},
     {"case_channel_left_time_range_write_scoped", case_channel_left_time_range_write_scoped},
+    {"case_channel_selector_read_then_index", case_channel_selector_read_then_index},
+    {"case_channel_lhs_rejects_computed_suffix", case_channel_lhs_rejects_computed_suffix},
     {"case_channel_write_requires_stereo", case_channel_write_requires_stereo},
     {"case_channel_write_requires_index", case_channel_write_requires_index},
     {"case_long_stereo_plus_equals_short_left_only_stereo", case_long_stereo_plus_equals_short_left_only_stereo},

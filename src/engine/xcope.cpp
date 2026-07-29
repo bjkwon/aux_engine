@@ -202,6 +202,60 @@ static std::string preprocess_member_function_syntax(const std::string& src, std
 	return out;
 }
 
+static bool is_known_zero_arg_callable(const EngineRuntime* env, const std::string& name)
+{
+	if (!env || name.empty())
+		return false;
+	auto bit = env->builtin.find(name);
+	if (bit != env->builtin.end())
+		return bit->second.narg1 == 0 && bit->second.narg2 == 0;
+	auto uit = env->udf.find(lower_copy(name));
+	if (uit == env->udf.end() || !uit->second.uxtree || !uit->second.uxtree->child)
+		return false;
+	AstNode* formals = uit->second.uxtree->child;
+	return formals->type == N_IDLIST && formals->child == nullptr;
+}
+
+static std::string preprocess_zero_arg_call_syntax(const std::string& src, const EngineRuntime* env)
+{
+	std::string out = src;
+	bool in_string = false;
+	for (size_t i = 0; i < out.size(); ++i)
+	{
+		if (out[i] == '"')
+		{
+			in_string = !in_string;
+			continue;
+		}
+		if (in_string)
+			continue;
+		if (out[i] == '/' && i + 1 < out.size() && out[i + 1] == '/')
+		{
+			while (i < out.size() && out[i] != '\n') ++i;
+			continue;
+		}
+		if (!is_ident_char(out[i]) || std::isdigit((unsigned char)out[i]) || out[i] == '?')
+			continue;
+
+		const size_t name_begin = i;
+		while (i < out.size() && is_ident_char(out[i])) ++i;
+		const size_t name_end = i;
+		std::string name = out.substr(name_begin, name_end - name_begin);
+		size_t open = skip_spaces(out, name_end, out.size());
+		if (open >= out.size() || out[open] != '(')
+			continue;
+		size_t close = skip_spaces(out, open + 1, out.size());
+		if (close >= out.size() || out[close] != ')')
+			continue;
+		if (!is_known_zero_arg_callable(env, name))
+			continue;
+		for (size_t k = open; k <= close; ++k)
+			out[k] = ' ';
+		i = close;
+	}
+	return out;
+}
+
 static void mark_member_function_nodes(AstNode* p, const std::set<int>& member_function_lines)
 {
 	for (; p; p = p->next)
@@ -360,6 +414,7 @@ EngineRuntime::EngineRuntime(const int fs)
 	xff[T_CATCHBACK] = &EngineRuntime::CATCH;
 	xff[N_HOOK] = &EngineRuntime::ID;
 	xff[T_ID] = &EngineRuntime::ID;
+	xff[N_CALL] = &EngineRuntime::ID;
 	xff[N_TSEQ] = &EngineRuntime::TSEQ;
 	xff[T_NUMBER] = &EngineRuntime::NUMBER;
 	xff[T_STRING] = &EngineRuntime::STRING;
@@ -544,6 +599,7 @@ AstNode* AuxScope::makenodes(const string& instr)
 	if (instr.empty()) return node;
 	std::set<int> member_function_lines;
 	std::string parser_input = preprocess_member_function_syntax(instr, member_function_lines);
+	parser_input = preprocess_zero_arg_call_syntax(parser_input, pEnv);
 	if (nodeAllocated) {
 		yydeleteAstNode(node, 0);
 		nodeAllocated = false;
@@ -747,6 +803,30 @@ static bool is_async_record_callback_suffix(const AstNode* pn)
 	if (!pn->str || strcmp(pn->str, "record") != 0) return false;
 	return pn->alt && pn->alt->type == N_STRUCT;
 }
+
+static bool is_channel_selector_suffix(const AstNode* pn)
+{
+	if (!pn || pn->type != N_STRUCT || !pn->str)
+		return false;
+	return !strcmp(pn->str, "left") || !strcmp(pn->str, "right");
+}
+
+struct ChannelSelectorAltGuard
+{
+	AstNode* node;
+	AstNode* savedAlt;
+
+	ChannelSelectorAltGuard(AstNode* n, AstNode* alt)
+		: node(n), savedAlt(alt)
+	{
+		if (node) node->alt = nullptr;
+	}
+
+	~ChannelSelectorAltGuard()
+	{
+		if (node) node->alt = savedAlt;
+	}
+};
 
 bool AuxScope::IsConditional(const AstNode* pnode)
 {
@@ -979,14 +1059,23 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 	int ind(0);
 	CVar* pres;
 	ostringstream out;
-	if ((ptree->type == T_ID || ptree->type == N_STRUCT) && pEnv->IsValidBuiltin(ptree->str))
+	if ((ptree->type == T_ID || ptree->type == N_CALL || ptree->type == N_STRUCT) && pEnv->IsValidBuiltin(ptree->str))
 	{
-		HandleAuxFunction(ptree);
+		AstNode* channelSelectorIndex = nullptr;
+		if (is_channel_selector_suffix(ptree) && ptree->alt &&
+			(ptree->alt->type == N_ARGS || ptree->alt->type == N_TIME_EXTRACT))
+		{
+			channelSelectorIndex = ptree->alt;
+			ChannelSelectorAltGuard guard(ptree, channelSelectorIndex);
+			HandleAuxFunction(ptree);
+		}
+		else
+			HandleAuxFunction(ptree);
 		// In a top-level assignment e.g., a = 1; ptree->child should be checked instead
 		if (ptree->child)	throw_LHS_lvalue(ptree, false);
 		*psigBase = &Sig;
 		// if a function call follows N_ARGS, skip it for next_parsible_node
-		if (ptree->alt)
+		if (!channelSelectorIndex && ptree->alt)
 		{
 			if (ptree->alt->type == N_ARGS || ptree->alt->type == N_HOOK)
 				ptree = ptree->alt; // to skip N_ARGS
@@ -996,24 +1085,28 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 	}
 	else if (ptree->type == N_ARGS)
 	{
+		CVar base = **psigBase;
 		CVar ind;
-		eval_index(ptree->child, *psigBase, ind);
+		eval_index(ptree->child, base, ind);
 		if (ind.nSamples == 0)
 			Sig.Reset();
 		else
-			extract_by_index(Sig, ind, *psigBase, false);
+			extract_by_index(Sig, ind, base, false);
+		*psigBase = &Sig;
 	}
 	else if (ptree->type == N_TIME_EXTRACT)
 	{
-		if (!ISAUDIO((*psigBase)->type())) {
+		CVar base = **psigBase;
+		if (!ISAUDIO(base.type())) {
 			out << "LHS must be audio.";
 			throw exception_etc(*this, ptree, out.str()).raise();
 		}
-		CSignals timepoints = gettimepoints(*psigBase, ptree);
-		if ((*psigBase)->next)
-			timepoints.SetNextChan(gettimepoints((*psigBase)->next, ptree));
-		Sig = **psigBase;
+		CSignals timepoints = gettimepoints(&base, ptree);
+		if (base.next)
+			timepoints.SetNextChan(gettimepoints(base.next, ptree));
+		Sig = base;
 		Sig.Crop(timepoints);
+		*psigBase = &Sig;
 	}
 	else if (ptree->type == T_REPLICA || ptree->type == T_ENDPOINT)
 	{

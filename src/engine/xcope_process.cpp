@@ -468,6 +468,8 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 					// (not a copy, unlike the read-side left()/right() builtins which mutate Sig).
 					if (!plhs->alt->alt)
 						throw exception_etc(*this, plhs, string(".") + plhs->alt->str + " must be used with an index on the LHS, e.g. x." + plhs->alt->str + "(t1~t2) = ...").raise();
+					if (plhs->alt->alt->type != N_ARGS && plhs->alt->alt->type != N_TIME_EXTRACT)
+						throw exception_etc(*this, plhs, string(".") + plhs->alt->str + " on the LHS must be followed directly by an index, e.g. x." + plhs->alt->str + "(t1~t2) = ...").raise();
 					if (!pvarLHS->next)
 						throw exception_etc(*this, plhs, string(".") + plhs->alt->str + " requires a stereo signal.").raise();
 					// Keep pvarLHS pointing at the whole (real) stereo CVar, for both .left and .right:
