@@ -59,6 +59,39 @@ static EvalOutcome eval(Session& s, const std::string& cmd) {
   return out;
 }
 
+struct FakeGraphicsBackendState {
+  std::string lastNamedSource;
+  int namedFigureCalls = 0;
+  int figureAtPosCalls = 0;
+};
+
+static int fake_graphics_notify(void*, const auxGraphicsEvent&, std::string&) {
+  return 0;
+}
+
+static uint64_t fake_named_figure(void* userdata, const char* sourceName, std::string& err) {
+  auto* state = static_cast<FakeGraphicsBackendState*>(userdata);
+  if (!state || !sourceName) {
+    err = "bad fake graphics backend state";
+    return 0;
+  }
+  state->lastNamedSource = sourceName;
+  ++state->namedFigureCalls;
+  if (state->lastNamedSource == "y") {
+    return 222;
+  }
+  err.clear();
+  return 0;
+}
+
+static uint64_t fake_figure_at_pos(void* userdata, const double[4], std::string&) {
+  auto* state = static_cast<FakeGraphicsBackendState*>(userdata);
+  if (state) {
+    ++state->figureAtPosCalls;
+  }
+  return 333;
+}
+
 static bool expect_error_contains(Session& s,
                                   const std::string& cmd,
                                   const std::string& needle,
@@ -107,6 +140,7 @@ static bool case_graphics_builtins_fail_gracefully(std::string& err) {
   const std::vector<std::pair<std::string, std::string>> cases = {
       {"h=figure([100 100 640 480])", "Graphics backend not available in this frontend."},
       {"hf=figure(\"v\")", "Graphics backend not available in this frontend."},
+      {"hy=figure(y)", "Graphics backend not available in this frontend."},
       {"ax=axes([.13 .11 .775 .815])", "Graphics backend not available in this frontend."},
       {"p=plot(v)", "Graphics backend not available in this frontend."},
       {"ln=line(x,y)", "Graphics backend not available in this frontend."},
@@ -123,7 +157,7 @@ static bool case_graphics_builtins_fail_gracefully(std::string& err) {
     }
   }
 
-  const std::vector<std::string> failedVars = {"h", "hf", "ax", "p", "ln", "tx"};
+  const std::vector<std::string> failedVars = {"h", "hf", "hy", "ax", "p", "ln", "tx"};
   for (const std::string& varName : failedVars) {
     if (!expect_missing_var(s, varName, err)) {
       return false;
@@ -133,10 +167,66 @@ static bool case_graphics_builtins_fail_gracefully(std::string& err) {
   return true;
 }
 
+static bool case_figure_source_lookup_replaces_position_overload(std::string& err) {
+  Session s("case_figure_source_lookup_replaces_position_overload");
+  if (!s.ok()) {
+    err = s.err;
+    return false;
+  }
+
+  const EvalOutcome setup = eval(s, "y=[10 20 15 25 22]");
+  if (setup.rc != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "Setup eval failed, preview=[" + setup.preview + "]";
+    return false;
+  }
+
+  FakeGraphicsBackendState state;
+  auxGraphicsBackend backend;
+  backend.userdata = &state;
+  backend.notify = &fake_graphics_notify;
+  backend.named_figure = &fake_named_figure;
+  backend.figure_at_pos = &fake_figure_at_pos;
+  if (aux_install_graphics_backend(s.ctx, backend) != 0) {
+    err = "aux_install_graphics_backend failed.";
+    return false;
+  }
+
+  const EvalOutcome sourceLookup = eval(s, "hy=figure(y)");
+  if (sourceLookup.rc != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "Expected figure(y) to succeed, preview=[" + sourceLookup.preview + "]";
+    return false;
+  }
+  if (state.namedFigureCalls != 1 || state.lastNamedSource != "y") {
+    err = "Expected figure(y) to call named_figure with source y.";
+    return false;
+  }
+
+  if (!expect_error_contains(s,
+                             "hp=figure([100 100 640 480])",
+                             "figure([x y w h]) is obsolete",
+                             err)) {
+    return false;
+  }
+  if (state.figureAtPosCalls != 0) {
+    err = "Obsolete figure([x y w h]) form should not call figure_at_pos.";
+    return false;
+  }
+  if (!expect_missing_var(s, "hp", err)) {
+    return false;
+  }
+
+  return true;
+}
+
 int main() {
   std::string err;
 
   if (!case_graphics_builtins_fail_gracefully(err)) {
+    std::cerr << "FAIL: regression_graphics_nogui: " << err << "\n";
+    return 1;
+  }
+
+  if (!case_figure_source_lookup_replaces_position_overload(err)) {
     std::cerr << "FAIL: regression_graphics_nogui: " << err << "\n";
     return 1;
   }
