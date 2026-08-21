@@ -7,7 +7,9 @@
 #include <iomanip>
 #include <auxe/auxe.h>
 #include <filesystem> // Include the C++17 filesystem library
+#if AUX_HAVE_PORTAUDIO
 #include "portaudio.h"
+#endif
 #include "console.h"
 #include "utils.h"
 #ifndef _WIN32
