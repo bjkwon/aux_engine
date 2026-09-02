@@ -593,8 +593,6 @@ void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, b
 void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* plhs, const AstNode* prhs)
 {
 	bool isreplica = prhs != NULL;
-	if (channelWriteSel && isreplica)
-		throw exception_etc(*this, plhs, "Replicator (..) is not yet supported with .left/.right assignment.").raise();
 	if (lhs_index.nSamples == 0)
 	{
 		CVar rhs_eval;
@@ -611,7 +609,10 @@ void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool
 	if (plhs->alt->type == N_TIME_EXTRACT)
 	{
 		if (isreplica) { //RL-T
-			replica = lvar;
+			if (channelWriteSel == 2)
+				replica = *lvar.next;
+			else
+				replica = lvar;
 			replica.Crop(lhs_index);
 			insertreplace(plhs, Compute(prhs), lhs_index, &lvar, isreplica);
 			replica.Reset();
@@ -623,13 +624,14 @@ void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool
 	{
 		const AstNode* pn = plhs->alt;
 		if (isreplica) { //RL-X
+			CSignals& target = (channelWriteSel == 2) ? *lvar.next : lvar;
 			replica.UpdateBuffer(lhs_index.nSamples);
 			if (contig)
-				memmove(replica.logbuf, lvar.logbuf + (size_t)(lvar.bufBlockSize * (lhs_index.buf[0] - 1)), lvar.bufBlockSize * lhs_index.nSamples);
+				memmove(replica.logbuf, target.logbuf + (size_t)(target.bufBlockSize * (lhs_index.buf[0] - 1)), target.bufBlockSize * lhs_index.nSamples);
 			else
 				for (uint64_t k = 0; k < lhs_index.nSamples; k++)
-					replica.buf[k] = lvar.buf[(uint64_t)lhs_index.buf[k] - 1];
-			adjust_buf(lvar, lhs_index, Compute(prhs), contig, pn);
+					replica.buf[k] = target.buf[(uint64_t)lhs_index.buf[k] - 1];
+			adjust_buf(target, lhs_index, Compute(prhs), contig, pn);
 			replica.Reset();
 		}
 		else if (channelWriteSel == 2)
@@ -800,10 +802,12 @@ void AuxScope::insertreplace(const AstNode* plhs, const CVar& robj, const CVar& 
 	if ((p->alt && p->alt->type == N_TIME_EXTRACT) || // x{id}(t1~t2) = ...sqrt
 		p->type == N_TIME_EXTRACT || (p->next && p->next->type == N_IDLIST))  // s(repl_RHS1~repl_RHS2)   or  cel{n}(repl_RHS1~repl_RHS2)
 	{
-		// (channelWriteSel && isreplica) is already rejected in mod_sig before insertreplace is called.
 		if (isreplica) // direct update of buf
 		{
-			replace(*lobj, indsig, robj, *this, plhs);
+			if (channelWriteSel)
+				((CTimeSeries*)(channelWriteSel == 2 ? lobj->next : lobj))->CTimeSeries::ReplaceBetweenTPs(robj, indsig.buf[0], indsig.buf[1]);
+			else
+				replace(*lobj, indsig, robj, *this, plhs);
 		}
 		else if (channelWriteSel)
 			// .left/.right-scoped write: lobj is always the whole stereo variable itself (see

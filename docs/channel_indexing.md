@@ -25,6 +25,7 @@ x.left(t1~t2)
 x.right(id1:id2)
 x.left(t1~t2) = RHS
 x.right(id1:id2) = RHS
+x.right(t1~t2) @@= gain_dB
 ```
 
 | Operand | Role |
@@ -32,7 +33,7 @@ x.right(id1:id2) = RHS
 | `x` | An existing stereo audio variable (must already have two channels). |
 | `.left` / `.right` | Selects which channel of `x` the next index applies to. |
 | `(t1~t2)` / `(id1:id2)` | Same time-range or numeric-range index forms already valid for whole-object indexing. |
-| `RHS` | For a time-range index, must be audio (spliced in, like whole-object time-range assignment). For a numeric-range index, may be a scalar fill or a same-length numeric/audio value, same as whole-object numeric indexing. |
+| `RHS` | For a time-range index, must be audio (spliced in, like whole-object time-range assignment). For a numeric-range index, may be a scalar fill or a same-length numeric/audio value, same as whole-object numeric indexing. Compound gain updates such as `@@=` use only the selected channel as the replica/current value. |
 
 An index is required: bare `x.left = RHS` (no parentheses) is rejected rather than silently
 misbehaving — use `x.left(:) = RHS` if a whole-channel replace is ever added.
@@ -70,8 +71,8 @@ misbehaving — use `x.left(:) = RHS` if a whole-channel replace is ever added.
 - `.left`/`.right` followed by a computed suffix on the LHS (e.g. `x.left.rms = RHS`): rejected
   because the next suffix is not an assignable index.
 - `.left`/`.right` on a mono `x`: *"`.left` requires a stereo signal."*
-- Combined with the replicator (`x.left(t1~t2) ++= ...`): rejected as not yet supported, rather
-  than risking a channel-crossed write.
+- Combined with the append replicator (`x.left(t1~t2) ++= ...`): not supported. Compound
+  mutation operators such as `@@=` are supported and affect only the selected channel.
 
 ---
 

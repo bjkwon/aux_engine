@@ -550,6 +550,21 @@ static bool case_channel_left_time_range_write_scoped(std::string& err) {
   return true;
 }
 
+static bool case_channel_right_compound_gain_write_scoped(std::string& err) {
+  Session s("case_channel_right_compound_gain_write_scoped");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[tone(500,100)@-12; tone(1000,100)@-18]", "stereo tone setup") ||
+      !expect_eval_ok(s, "x.right(25~75)@@=-35", "x.right(25~75)@@=-35") ||
+      !expect_eval_ok(s, "l=x.left(25~75).rms", "left rms after right scoped @@=") ||
+      !expect_eval_ok(s, "r=x.right(25~75).rms", "right rms after right scoped @@=") ||
+      !expect_scalar_value(s, "l", -12.0, 0.5) ||
+      !expect_scalar_value(s, "r", -53.0, 0.5)) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
 static bool case_channel_selector_read_then_index(std::string& err) {
   Session s("case_channel_selector_read_then_index");
   if (!s.ok()) { err = s.err; return false; }
@@ -646,6 +661,7 @@ int main() {
     {"case_channel_left_numeric_range_write_scoped", case_channel_left_numeric_range_write_scoped},
     {"case_channel_right_numeric_range_write_scoped", case_channel_right_numeric_range_write_scoped},
     {"case_channel_left_time_range_write_scoped", case_channel_left_time_range_write_scoped},
+    {"case_channel_right_compound_gain_write_scoped", case_channel_right_compound_gain_write_scoped},
     {"case_channel_selector_read_then_index", case_channel_selector_read_then_index},
     {"case_channel_lhs_rejects_computed_suffix", case_channel_lhs_rejects_computed_suffix},
     {"case_channel_write_requires_stereo", case_channel_write_requires_stereo},
