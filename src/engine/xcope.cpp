@@ -1049,6 +1049,49 @@ static bool try_instantiate_class_call(AuxScope& ths, const AstNode* pCalling, C
 	return true;
 }
 
+static bool try_call_native_module_function(AuxScope& ths, AstNode* ptree, CVar** psigBase, AstNode** pnext)
+{
+	if (!ptree || ptree->type != T_ID || !ptree->str || !ptree->alt || ptree->alt->type != N_STRUCT)
+		return false;
+	AstNode* func_node = ptree->alt;
+	if (!func_node->str)
+		return false;
+	string qualified_name;
+	if (!ths.pEnv || !ths.pEnv->ResolveNativeModuleFunction(ptree->str, func_node->str, qualified_name))
+		return false;
+	if (func_node->alt && func_node->alt->type != N_ARGS)
+		throw exception_etc(ths, func_node, qualified_name + " has an invalid native module call suffix.").raise();
+	if (ptree->child)
+		ths.throw_LHS_lvalue(ptree, false);
+
+	vector<CVar> args;
+	const AstNode* arg = func_node->alt ? func_node->alt->child : nullptr;
+	bool has_receiver = false;
+	if (arg) {
+		ths.Compute(arg);
+		has_receiver = true;
+		for (arg = arg->next; arg; arg = arg->next) {
+			AuxScope smallAuxScope(&ths);
+			smallAuxScope.Compute(arg);
+			args.push_back(smallAuxScope.Sig);
+		}
+	} else {
+		ths.Sig.Reset();
+	}
+
+	CVar out;
+	string err;
+	if (ths.pEnv->InvokeNativeModuleFunction(qualified_name, &ths, has_receiver, args, out, err) != 0) {
+		if (err.empty())
+			err = qualified_name + "(): native module callback failed.";
+		throw exception_etc(ths, func_node, err).raise();
+	}
+	ths.Sig = out;
+	*psigBase = &ths.Sig;
+	*pnext = func_node->alt ? get_next_parsible_node(func_node->alt) : get_next_parsible_node(func_node);
+	return true;
+}
+
 AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 {
 	if (ptree->type == T_OP_CONCAT || ptree->type == '+' || ptree->type == '-' || ptree->type == T_TRANSPOSE || ptree->type == T_MATRIXMULT
@@ -1061,6 +1104,9 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 	int ind(0);
 	CVar* pres;
 	ostringstream out;
+	AstNode* module_next = nullptr;
+	if (try_call_native_module_function(*this, ptree, psigBase, &module_next))
+		return module_next;
 	if ((ptree->type == T_ID || ptree->type == N_CALL || ptree->type == N_STRUCT) && pEnv->IsValidBuiltin(ptree->str))
 	{
 		AstNode* channelSelectorIndex = nullptr;

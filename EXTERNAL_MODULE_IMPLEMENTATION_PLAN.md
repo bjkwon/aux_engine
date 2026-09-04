@@ -19,12 +19,15 @@ An AUX script imports a native module before using its functions:
 
 ```aux
 import("testmodule")
-y = test_add1(x)
+y = testmodule.test_add1(x)
+
+import("testmodule", "tm")
+z = tm.test_add1(x)
 ```
 
-After import, module functions are registered into the same runtime builtin table used by builtins. Repeated imports of the same module in the same `auxContext` are idempotent.
+After import, module functions are resolved through the imported module namespace or alias. They are not registered as global builtins. Repeated imports of the same module and alias in the same `auxContext` are idempotent.
 
-Errors must be readable when a module is missing, a manifest is malformed, a library cannot be loaded, the module ABI is incompatible, the entrypoint is absent, a function name collides, or a module callback fails.
+Errors must be readable when a module is missing, a manifest is malformed, a library cannot be loaded, the module ABI is incompatible, the entrypoint is absent, an alias collides, or a module callback fails.
 
 ## ABI Boundary
 
@@ -77,7 +80,7 @@ Minimal manifest:
 
 ## Non-Goals
 
-V1 does not include online package discovery, download, uninstall, dependency solving, sandboxing, namespace aliases, hot reload, or AUX-source module packaging.
+V1 does not include online package discovery, download, uninstall, dependency solving, sandboxing, hot reload, or AUX-source module packaging.
 
 ## Verification
 
