@@ -207,6 +207,7 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("eval", eval);
 	SET_BUILTIN_FUNC("str2num", str2num);
 	SET_BUILTIN_FUNC("include", include);
+	SET_BUILTIN_FUNC("import", import);
 	SET_BUILTIN_FUNC("diff", diff);
 	SET_BUILTIN_FUNC("cumsum", cumsum);
 	

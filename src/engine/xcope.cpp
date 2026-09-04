@@ -23,6 +23,7 @@ using namespace std;
 #endif
 
 int GetFileText(FILE* fp, string& strOut); // utils.cpp
+void auxe_close_native_modules(EngineRuntime& runtime); // native_module_loader.cpp
 
 #ifndef _WINDOWS
 static string preferred_relative_base_dir(const vector<string>& auxPaths)
@@ -481,6 +482,7 @@ EngineRuntime::EngineRuntime(const int fs)
 
 EngineRuntime::~EngineRuntime()
 {
+	auxe_close_native_modules(*this);
 	for (auto it = fileTable.begin(); it != fileTable.end(); it++) {
 		if ((*it).second.open) fclose((*it).second.fp);
 	}

@@ -283,4 +283,28 @@ if(AUXE_BUILD_TESTS)
     NAME auxe_regression_eval_errors
     COMMAND auxe_regression_eval_errors
   )
+
+  add_library(auxe_test_native_module SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/native_module_fixture.cpp
+  )
+  target_include_directories(auxe_test_native_module PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  add_library(auxe_test_native_no_entry SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/native_module_no_entry.cpp
+  )
+
+  add_executable(auxe_regression_external_module
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_external_module.cpp
+  )
+  target_link_libraries(auxe_regression_external_module PRIVATE auxe)
+  target_include_directories(auxe_regression_external_module PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_definitions(auxe_regression_external_module PRIVATE
+    TEST_NATIVE_MODULE_PATH="$<TARGET_FILE:auxe_test_native_module>"
+    TEST_NATIVE_NO_ENTRY_MODULE_PATH="$<TARGET_FILE:auxe_test_native_no_entry>"
+  )
+
+  add_test(
+    NAME auxe_regression_external_module
+    COMMAND auxe_regression_external_module
+  )
 endif()

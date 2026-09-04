@@ -7,6 +7,8 @@
 #include <vector>
 #include <map>
 #include <complex>
+#include <cstddef>
+#include <cstdint>
 
 using std::string;
 using std::vector;
@@ -28,6 +30,8 @@ typedef struct auxContext auxContext;
 // AuxObj is opaque, but actually a pointer type
 struct _AuxObj;
 using AuxObj = const _AuxObj*;
+
+static constexpr uint32_t AUXE_NATIVE_MODULE_ABI_VERSION = 1;
 
 enum class auxDebugAction {
     AUX_DEBUG_NO_DEBUG = -1,
@@ -166,6 +170,64 @@ struct AuxSignal {
     int fs;
     double tmark;
 };
+
+struct auxNativeValue {
+    const void* impl = nullptr;
+};
+
+struct auxNativeMutableValue {
+    void* impl = nullptr;
+};
+
+using auxNativeFunctionCallback = int(*)(auxContext* ctx,
+                                         auxNativeValue receiver,
+                                         const auxNativeValue* args,
+                                         size_t nargs,
+                                         auxNativeMutableValue result,
+                                         char* err,
+                                         size_t err_cap);
+
+struct auxNativeFunctionDesc {
+    const char* name = nullptr;
+    int min_args = 0;
+    int max_args = 0;
+    int allow_dot_call = 0;
+    auxNativeFunctionCallback callback = nullptr;
+};
+
+struct auxNativeModuleInfo {
+    uint32_t abi_version = AUXE_NATIVE_MODULE_ABI_VERSION;
+    const char* name = nullptr;
+    const auxNativeFunctionDesc* functions = nullptr;
+    size_t function_count = 0;
+};
+
+struct auxNativeModuleHost {
+    uint32_t abi_version = AUXE_NATIVE_MODULE_ABI_VERSION;
+    size_t size = sizeof(auxNativeModuleHost);
+
+    uint16_t (*value_type)(auxNativeValue value) = nullptr;
+    int (*value_get_scalar)(auxNativeValue value, auxtype* out) = nullptr;
+    size_t (*value_vector_length)(auxNativeValue value) = nullptr;
+    size_t (*value_copy_vector)(auxNativeValue value, auxtype* out, size_t max_len) = nullptr;
+    size_t (*value_string_length)(auxNativeValue value) = nullptr;
+    size_t (*value_copy_string)(auxNativeValue value, char* out, size_t max_len) = nullptr;
+    int (*value_num_channels)(auxNativeValue value) = nullptr;
+    size_t (*value_flatten_channel_length)(auxNativeValue value, int channel_index) = nullptr;
+    size_t (*value_flatten_channel)(auxNativeValue value, int channel_index, auxtype* out, size_t max_len) = nullptr;
+
+    int (*result_set_null)(auxNativeMutableValue result) = nullptr;
+    int (*result_set_scalar)(auxNativeMutableValue result, auxtype value) = nullptr;
+    int (*result_set_vector)(auxNativeMutableValue result, const auxtype* values, size_t len) = nullptr;
+    int (*result_set_string)(auxNativeMutableValue result, const char* value) = nullptr;
+    int (*result_set_audio_mono)(auxNativeMutableValue result, const auxtype* values, size_t frames, int sample_rate) = nullptr;
+    int (*result_set_audio_stereo)(auxNativeMutableValue result, const auxtype* left, const auxtype* right, size_t frames, int sample_rate) = nullptr;
+};
+
+using auxNativeModuleInit = int(*)(const auxNativeModuleHost* host,
+                                  auxNativeModuleInfo* info,
+                                  char* err,
+                                  size_t err_cap);
 
 typedef struct {
     int sample_rate;

@@ -112,6 +112,7 @@ void _msgbox(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _include(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 DECL_GATE(_eval)
 DECL_GATE(_include)
+DECL_GATE(_import)
 DECL_GATE(_group)
 DECL_GATE(_ungroup)
 DECL_GATE(_clear)

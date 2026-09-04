@@ -164,6 +164,17 @@ struct FileEntry {
 	bool open;
 };
 
+struct NativeModuleFunction {
+	string module_name;
+	auxNativeFunctionDesc desc;
+};
+
+struct NativeModuleHandle {
+	string name;
+	string path;
+	void* library = nullptr;
+};
+
 class EngineRuntime
 {
 public:
@@ -182,8 +193,12 @@ public:
 	bool shutdown;
 	auxGraphicsBackend graphics_backend;
 	auxPlaybackBackend playback_backend;
+	map<string, NativeModuleFunction> native_module_functions;
+	map<string, NativeModuleHandle> native_modules;
 	void InitBuiltInFunctions();
 	bool IsValidBuiltin(const string& funcname);
+	int LoadNativeModule(const string& module_name, string& errstr);
+	int InvokeNativeModuleFunction(const string& funcname, AuxScope* past, const vector<CVar>& args, CVar& result, string& errstr);
 	void InitErrorCodes();
 	string path_delimited_semicolon();
 	vector<string> InitBuiltInFunctionsExt(const vector<string>& externalModules);
