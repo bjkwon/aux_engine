@@ -1,13 +1,17 @@
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #include "nlohmann/json.hpp"
 
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
+#include "_file_mp3.h"
+#include "_file_wav.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -221,6 +225,133 @@ static int native_result_set_audio_stereo(auxNativeMutableValue result, const au
 	return 0;
 }
 
+static int native_result_set_bytes(auxNativeMutableValue result, const unsigned char* values, size_t len)
+{
+	CVar* out = native_as_mutable_cvar(result);
+	if (!out || (!values && len > 0)) return 1;
+	out->Reset(1);
+	out->bufBlockSize = 1;
+	out->UpdateBuffer(static_cast<uint64_t>(len));
+	if (len > 0)
+		memcpy(out->strbuf, values, len);
+	out->SetByte();
+	return 0;
+}
+
+static bool read_file_bytes(const string& path, vector<unsigned char>& bytes)
+{
+	ifstream in(path, std::ios::binary);
+	if (!in.is_open())
+		return false;
+	in.seekg(0, std::ios::end);
+	const std::streamoff size = in.tellg();
+	if (size < 0)
+		return false;
+	in.seekg(0, std::ios::beg);
+	bytes.resize(static_cast<size_t>(size));
+	if (!bytes.empty())
+		in.read(reinterpret_cast<char*>(bytes.data()), size);
+	return in.good() || in.eof();
+}
+
+static int native_filetype(const string& path)
+{
+	FILE* fp = fopen(path.c_str(), "rb");
+	if (!fp) return 0;
+	char buffer[16] = {};
+	const auto n = fread(buffer, 1, sizeof(buffer), fp);
+	fclose(fp);
+	if (n < 12) return 4;
+	if (!memcmp(buffer, "RIFF", 4) && !memcmp(buffer + 8, "WAVE", 4))
+		return 1;
+	if (!memcmp(buffer, "ID3", 3) || (buffer[0] == static_cast<char>(0xFF) && static_cast<char>(0xE0) <= buffer[1] && buffer[1] <= static_cast<char>(0xFF)))
+		return 2;
+	return 4;
+}
+
+static bool looks_like_text(const vector<unsigned char>& bytes)
+{
+	for (unsigned char ch : bytes) {
+		if (ch == 0)
+			return false;
+		if (ch < 0x20 && ch != '\t' && ch != '\n' && ch != '\r' && ch != '\f' && ch != '\b')
+			return false;
+	}
+	return true;
+}
+
+static int set_audio_from_interleaved(CVar* out, const vector<float>& input, size_t frames, int channels, int sample_rate)
+{
+	if (!out || sample_rate <= 0 || channels <= 0)
+		return 1;
+	out->Reset(sample_rate);
+	out->bufType = 'R';
+	if (channels == 1) {
+		out->UpdateBuffer(static_cast<uint64_t>(frames));
+		for (size_t i = 0; i < frames; ++i)
+			out->buf[i] = static_cast<auxtype>(input[i]);
+		return 0;
+	}
+	if (channels == 2) {
+		out->UpdateBuffer(static_cast<uint64_t>(frames));
+		CSignals right(sample_rate);
+		right.UpdateBuffer(static_cast<uint64_t>(frames));
+		for (size_t i = 0; i < frames; ++i) {
+			out->buf[i] = static_cast<auxtype>(input[i * 2]);
+			right.buf[i] = static_cast<auxtype>(input[i * 2 + 1]);
+		}
+		out->SetNextChan(right);
+		return 0;
+	}
+	return 1;
+}
+
+static int native_result_set_file(auxNativeMutableValue result, const char* path, int preferred_sample_rate)
+{
+	(void)preferred_sample_rate;
+	CVar* out = native_as_mutable_cvar(result);
+	if (!out || !path || !*path) return 1;
+
+	const string filename(path);
+	const int type = native_filetype(filename);
+	string err;
+	if (type == 1) {
+		WavInfo info{};
+		const int offset = wav_read_header(filename, info, err);
+		if (offset < 0 || !err.empty())
+			return 1;
+		FILE* fp = fopen(filename.c_str(), "rb");
+		if (!fp)
+			return 1;
+		fseek(fp, offset, SEEK_SET);
+		const uint64_t frames = info.block_align ? (info.data_size / info.block_align) : 0;
+		vector<float> buffer;
+		const uint64_t count = wav_read_float32(fp, frames, info, buffer, err);
+		fclose(fp);
+		if (!err.empty())
+			return 1;
+		return set_audio_from_interleaved(out, buffer, static_cast<size_t>(count), static_cast<int>(info.num_channels), static_cast<int>(info.sample_rate));
+	}
+	if (type == 2) {
+		Mp3Info info{};
+		vector<float> buffer;
+		const uint64_t frames = mp3_read_float32(filename, 0.0, -1.0, info, buffer, err);
+		if (!err.empty())
+			return 1;
+		return set_audio_from_interleaved(out, buffer, static_cast<size_t>(frames), static_cast<int>(info.num_channels), static_cast<int>(info.sample_rate));
+	}
+
+	vector<unsigned char> bytes;
+	if (!read_file_bytes(filename, bytes))
+		return 1;
+	if (looks_like_text(bytes)) {
+		string text(bytes.begin(), bytes.end());
+		out->SetString(text.c_str());
+		return 0;
+	}
+	return native_result_set_bytes(result, bytes.empty() ? nullptr : bytes.data(), bytes.size());
+}
+
 static const auxNativeModuleHost kNativeHost = {
 	AUXE_NATIVE_MODULE_ABI_VERSION,
 	sizeof(auxNativeModuleHost),
@@ -239,7 +370,9 @@ static const auxNativeModuleHost kNativeHost = {
 	&native_result_set_string,
 	&native_result_set_audio_mono,
 	&native_result_set_audio_stereo,
-	&native_value_sample_rate
+	&native_value_sample_rate,
+	&native_result_set_bytes,
+	&native_result_set_file
 };
 
 static string path_join2(const string& a, const string& b)
@@ -416,7 +549,7 @@ static bool manifest_function_allows(const json& manifest, const string& name)
 
 } // namespace
 
-int EngineRuntime::InvokeNativeModuleFunction(const string& funcname, AuxScope* past, bool has_receiver, const vector<CVar>& args, CVar& result, string& errstr)
+int EngineRuntime::InvokeNativeModuleFunction(const string& funcname, AuxScope* past, bool has_receiver, bool dot_call, const vector<CVar>& args, CVar& result, string& errstr)
 {
 	auto it = native_module_functions.find(funcname);
 	if (it == native_module_functions.end()) {
@@ -426,6 +559,10 @@ int EngineRuntime::InvokeNativeModuleFunction(const string& funcname, AuxScope* 
 	const auto cb = it->second.desc.callback;
 	if (!cb) {
 		errstr = "Native module function has no callback: " + funcname;
+		return 1;
+	}
+	if (dot_call && !it->second.desc.allow_dot_call) {
+		errstr = funcname + "(): static native module function cannot be called with dot notation.";
 		return 1;
 	}
 	const int total_args = static_cast<int>(args.size()) + (has_receiver ? 1 : 0);

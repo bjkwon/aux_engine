@@ -1,5 +1,7 @@
 # External Native Module Implementation Plan
 
+See `docs/external_modules.md` for the maintained external native module reference. This file records the original implementation plan and should stay shorter than the reference document.
+
 ## Summary
 
 Add a first-version external module system for `auxe` that supports private C/C++ native modules installed once on a user machine and imported explicitly by AUX scripts.
@@ -19,13 +21,15 @@ An AUX script imports a native module before using its functions:
 
 ```aux
 import("testmodule")
-y = testmodule.test_add1(x)
+y = testmodule::test_add1(x)
+y = x.testmodule::test_add1()
 
 import("testmodule", "tm")
-z = tm.test_add1(x)
+z = tm::test_add1(x)
+z = x.tm::test_add1()
 ```
 
-After import, module functions are resolved through the imported module namespace or alias. They are not registered as global builtins. Repeated imports of the same module and alias in the same `auxContext` are idempotent.
+After import, module functions are resolved through the imported module namespace or alias with `module::function(...)` syntax. They are not registered as global builtins. For non-static functions, `x.module::function(...)` is equivalent to `module::function(x, ...)`. Repeated imports of the same module and alias in the same `auxContext` are idempotent.
 
 Errors must be readable when a module is missing, a manifest is malformed, a library cannot be loaded, the module ABI is incompatible, the entrypoint is absent, an alias collides, or a module callback fails.
 
@@ -41,6 +45,8 @@ extern "C" int auxe_module_init(const auxNativeModuleHost* host,
 ```
 
 The module receives host callbacks for reading opaque input values and writing an opaque output value. The ABI deliberately avoids exposing internal engine types such as `AuxScope`, `AstNode`, and `CVar`.
+
+Each `auxNativeFunctionDesc` includes an `allow_dot_call` flag. Module C/C++ code marks an AUX-static function by setting `allow_dot_call` to `0`; set it to `1` for functions that may use receiver syntax such as `x.module::function(...)`.
 
 V1 supports scalar, vector, string, and simple mono/stereo audio value exchange. Struct and cell inspection can be expanded later without changing the import model.
 

@@ -108,13 +108,30 @@ static int test_noarg(auxContext*,
   return g_host->result_set_scalar(result, 77.0);
 }
 
+static int test_static(auxContext*,
+                       auxNativeValue receiver,
+                       const auxNativeValue*,
+                       size_t,
+                       auxNativeMutableValue result,
+                       char* err,
+                       size_t err_cap)
+{
+  double value = 0.0;
+  if (!g_host->value_get_scalar(receiver, &value)) {
+    return g_host->result_set_scalar(result, value * 2.0);
+  }
+  set_err(err, err_cap, "test_static expects a scalar.");
+  return 1;
+}
+
 static auxNativeFunctionDesc kFunctions[] = {
-    {"test_add1", 1, 1, 0, &test_add1},
-    {"test_vec_add1", 1, 1, 0, &test_vec_add1},
-    {"test_string", 1, 1, 0, &test_string},
-    {"test_audio", 1, 1, 0, &test_audio},
-    {"test_fail", 1, 1, 0, &test_fail},
+    {"test_add1", 1, 1, 1, &test_add1},
+    {"test_vec_add1", 1, 1, 1, &test_vec_add1},
+    {"test_string", 1, 1, 1, &test_string},
+    {"test_audio", 1, 1, 1, &test_audio},
+    {"test_fail", 1, 1, 1, &test_fail},
     {"test_noarg", 0, 0, 0, &test_noarg},
+    {"test_static", 1, 1, 0, &test_static},
 };
 
 extern "C" int auxe_module_init(const auxNativeModuleHost* host,

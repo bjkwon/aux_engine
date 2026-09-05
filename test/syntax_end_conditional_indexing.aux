@@ -1,0 +1,128 @@
+// Regression test: end-index semantics, compound updates, special vars, and conditional indexing.
+// Uses msg.eval so each syntax sample doubles as executable test input and trace text.
+function r = syntax_end_conditional_indexing
+r.pass = 0
+r.fail = 0
+r.errpass = 0
+try
+	// "end" indexing on vectors, matrices, and audio time ranges.
+	printf("Indexed end tests............\n")
+	msg = "a=[4 3 8 9 3 -1]", printf("%s\n",msg), msg.eval
+	msg = "res=a(end)", msg.eval
+	r = test_check(r, res, -1, msg)	
+	msg = "res=a(1:2:end)", msg.eval
+	r = test_check(r, res, [4 8 3], msg)	
+	msg = "res=a([end/2 end-1 end])", msg.eval
+	r = test_check(r, res, [8 3 -1], msg)
+	msg = "a=[4 3 9; 33 7 5; 1 -2 0; 13 -1 8]", printf("%s\n",msg), msg.eval
+	msg = "res=a(end/2,end-1)", msg.eval
+	r = test_check(r, res, 7, msg)
+	msg = "x=[noise(2000); noise(1000)]", printf("%s\n",msg), msg.eval
+	msg = "y=x(0~end/2), res=[y.left.dur y.right.dur]", msg.eval
+	r = test_check(r, res, [1000 500], msg)
+	msg = "x=noise(480)@-10++noise(480)@-20", printf("%s\n",msg), msg.eval
+	msg = "x(end/2~end).rms", msg.eval
+	b=(x(end/2~end).rms+20).abs < 1.e-4
+	r = test_check_cond(r, b, msg)	
+	// Compound operators on direct, indexed, and time-sliced LHS targets.
+	printf("Compound Operators tests............\n")
+	msg = "a=[4 3 8 9 3 -1]", printf("%s\n",msg), msg.eval
+	suma=a.sum
+	msg = "a+=1", msg.eval
+	r = test_check(r, a.sum, suma+a.length, msg)	
+	msg = "a([2 4])+=1", msg.eval
+	r = test_check(r, a, [5 5 9 11 4 0], msg)	
+	msg = "a([2 end])+=1", msg.eval
+	r = test_check(r, a, [5 6 9 11 4 1], msg)
+	msg = "x=[noise(100)@-20; noise(50)@-10++tone(1000,50)@-30]", msg.eval
+	printf("%s\n", msg)
+	msg = "x(end/2~end)@=-40 // x(end/2~end).rms.left checked", msg.eval
+	b = (x(end/2~end).rms.left + 40).abs < 1
+	r = test_check_cond(r, b, msg)
+	msg = "x(end/2~end)@=-40 // x(end/2~end).rms.right checked", msg.eval
+	b = (x(end/2~end).rms.right + 40).abs < 1
+	r = test_check_cond(r, b, msg)
+	msg = "x(50~100)@=-40 // both left and right checked", msg.eval
+	b = (x(50~100).rms.left + 40).abs < 1 && (x(50~100).rms.right + 40).abs < 1 
+	r = test_check_cond(r, b, msg)
+	msg = "x(end/2~end)=tone(1000,50)@-11 // both left and right checked", msg.eval
+	b = (x(end/2~end).rms.left + 11).abs < 1 && (x(end/2~end).rms.right + 11).abs < 1 
+	r = test_check_cond(r, b, msg)
+	msg = "x(50~100)=tone(1000,50)@-11 // both left and right checked", msg.eval
+	b = (x(50~100).rms.left + 11).abs < 1 && (x(50~100).rms.right + 11).abs < 1 
+	r = test_check_cond(r, b, msg)
+	// Built-in special variable behavior.
+	printf("Special variables tests............\n")
+	msg = "j=i", msg.eval
+	r = test_check(r, j*j, -1, msg)	
+	msg = "jj=j", msg.eval
+	r = test_check(r, jj*jj, -1, msg)
+	msg = "i=2", msg.eval
+	r = test_check(r, i, 2, msg)
+	msg = "pi=22", msg.eval
+	r = test_check(r, pi, 22, msg)
+	msg = "inf>1e300", msg.eval
+	r = test_check_cond(r, inf>1e300, msg)
+	msg = "x=nan", msg.eval
+	r = test_check_cond(r, !(x==x), msg)
+	msg = "inf=3", msg.eval
+	r = test_check(r, inf, 3, msg)
+	msg = "nan=7", msg.eval
+	r = test_check(r, nan, 7, msg)
+	msg = "res=true+true", msg.eval
+	r = test_check(r, res, 2, msg)
+	msg = "res=true+false", msg.eval
+	r = test_check(r, res, 1, msg)
+
+	// Conditional/logical indexing and in-place mutation by condition.
+	printf("Conditional indexing tests............\n")
+	msg = "a=[4 3 9; 33 7 5; 1 -2 0; 13 -1 8], av=a(:)", printf("%s\n",msg), msg.eval
+	msg = "bv=av(av>5)", msg.eval
+	r = test_check(r, bv.length, 5, msg)	
+	msg = "av(av<0)*=-1", msg.eval
+	r = test_check(r, av.min, 0, msg)	
+	msg = "a=(1:10).sqrt, id=1:a.length", printf("%s\n",msg), msg.eval	
+	msg = "a(id%2==0)+=100", msg.eval
+	r = test_check(r, a(4), 102, msg)
+	msg ="x=tone(1000,2); y=x(x>0);", printf("%s\n",msg), msg.eval
+	b=y.min >= 0
+	r = test_check_cond(r, b, msg)
+	printf("\n")
+	
+catchback me
+	// Error path is intentionally non-fatal for regression flow.
+	msg0 = "PERR"
+	printf("%s: %s, %s\n", msg0, msg, me.body)
+	r.errpass += 1
+end
+
+// UDF helpers kept here for output-assignment syntax checks.
+function out52 = udf_ret_one_arg
+out52 = 1
+function [out1,out2] = udf_ret_two_arg
+out1 = "bj"
+out2 = 1==1
+
+
+// Equality-based assertion helper.
+function r1 = test_check(r1,a1,a2,msg)
+if (issame(a1,a2))
+	r1.pass += 1
+	msg0 = "PASS"
+else
+	r1.fail += 1
+	msg0 = "FAIL"
+end
+printf("%s: %s\n", msg0, msg)
+
+
+// Boolean assertion helper.
+function r = test_check_cond(r,a,msg)
+if a
+	r.pass += 1
+	msg0 = "PASS"
+else
+	r.fail += 1
+	msg0 = "FAIL"
+end
+printf("%s: %s\n", msg0, msg)

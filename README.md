@@ -67,6 +67,9 @@ This keeps auxe independent of storage formats outside its small codec allowlist
 - `src/func/`
   Built-in math, DSP, and utility functions
 
+- `docs/external_modules.md`
+  External native module syntax, registry layout, manifest format, C ABI, value conversion, and static/dot-call rules
+
 - `example_apps/aux/`
   Console app (this is included for illustration purposes. Ideally this should be in a separate repo.
 
@@ -186,7 +189,7 @@ brew install portaudio readline
 Windows
 ```powershell
 # aux2 supports audio play with portaudio.
-vcpkg install portaudio 
+vcpkg install portaudio
 
 cmake -S . -B build -A x64 `
   -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
@@ -202,4 +205,3 @@ cmake --install build --config $TYPE --prefix .\install
 
 auxe is under active development as a reusable engine.
 The public API is evolving as data-injection and extraction interfaces are formalized.
-

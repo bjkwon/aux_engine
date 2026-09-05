@@ -257,6 +257,33 @@ static std::string preprocess_zero_arg_call_syntax(const std::string& src, const
 	return out;
 }
 
+static std::string preprocess_module_scope_syntax(const std::string& src)
+{
+	std::string out = src;
+	bool in_string = false;
+	for (size_t i = 0; i + 1 < out.size(); ++i)
+	{
+		if (out[i] == '"')
+		{
+			in_string = !in_string;
+			continue;
+		}
+		if (in_string)
+			continue;
+		if (out[i] == '/' && out[i + 1] == '/')
+		{
+			while (i < out.size() && out[i] != '\n') ++i;
+			continue;
+		}
+		if (out[i] == ':' && out[i + 1] == ':')
+		{
+			out[i] = '.';
+			out.erase(i + 1, 1);
+		}
+	}
+	return out;
+}
+
 static void mark_member_function_nodes(AstNode* p, const std::set<int>& member_function_lines)
 {
 	for (; p; p = p->next)
@@ -601,6 +628,7 @@ AstNode* AuxScope::makenodes(const string& instr)
 	if (instr.empty()) return node;
 	std::set<int> member_function_lines;
 	std::string parser_input = preprocess_member_function_syntax(instr, member_function_lines);
+	parser_input = preprocess_module_scope_syntax(parser_input);
 	parser_input = preprocess_zero_arg_call_syntax(parser_input, pEnv);
 	if (nodeAllocated) {
 		yydeleteAstNode(node, 0);
@@ -1051,23 +1079,45 @@ static bool try_instantiate_class_call(AuxScope& ths, const AstNode* pCalling, C
 
 static bool try_call_native_module_function(AuxScope& ths, AstNode* ptree, CVar** psigBase, AstNode** pnext)
 {
-	if (!ptree || ptree->type != T_ID || !ptree->str || !ptree->alt || ptree->alt->type != N_STRUCT)
-		return false;
-	AstNode* func_node = ptree->alt;
-	if (!func_node->str)
+	if (!ptree || !ptree->str)
 		return false;
 	string qualified_name;
-	if (!ths.pEnv || !ths.pEnv->ResolveNativeModuleFunction(ptree->str, func_node->str, qualified_name))
+	AstNode* func_node = nullptr;
+	bool member_qualified_call = false;
+
+	if (ptree->type == T_ID && ptree->alt && ptree->alt->type == N_STRUCT) {
+		func_node = ptree->alt;
+		if (!func_node->str)
+			return false;
+		if (!ths.pEnv || !ths.pEnv->ResolveNativeModuleFunction(ptree->str, func_node->str, qualified_name))
+			return false;
+		if (ptree->child)
+			ths.throw_LHS_lvalue(ptree, false);
+	} else if (ptree->type == N_STRUCT && *psigBase) {
+		if (!ptree->alt || ptree->alt->type != N_STRUCT || !ptree->alt->str)
+			return false;
+		func_node = ptree->alt;
+		if (!ths.pEnv || !ths.pEnv->ResolveNativeModuleFunction(ptree->str, func_node->str, qualified_name))
+			return false;
+		member_qualified_call = true;
+	}
+
+	if (!func_node)
 		return false;
 	if (func_node->alt && func_node->alt->type != N_ARGS)
 		throw exception_etc(ths, func_node, qualified_name + " has an invalid native module call suffix.").raise();
-	if (ptree->child)
-		ths.throw_LHS_lvalue(ptree, false);
 
 	vector<CVar> args;
 	const AstNode* arg = func_node->alt ? func_node->alt->child : nullptr;
-	bool has_receiver = false;
-	if (arg) {
+	bool has_receiver = member_qualified_call;
+	if (member_qualified_call) {
+		ths.Sig = **psigBase;
+		for (; arg; arg = arg->next) {
+			AuxScope smallAuxScope(&ths);
+			smallAuxScope.Compute(arg);
+			args.push_back(smallAuxScope.Sig);
+		}
+	} else if (arg) {
 		ths.Compute(arg);
 		has_receiver = true;
 		for (arg = arg->next; arg; arg = arg->next) {
@@ -1081,7 +1131,7 @@ static bool try_call_native_module_function(AuxScope& ths, AstNode* ptree, CVar*
 
 	CVar out;
 	string err;
-	if (ths.pEnv->InvokeNativeModuleFunction(qualified_name, &ths, has_receiver, args, out, err) != 0) {
+	if (ths.pEnv->InvokeNativeModuleFunction(qualified_name, &ths, has_receiver, member_qualified_call, args, out, err) != 0) {
 		if (err.empty())
 			err = qualified_name + "(): native module callback failed.";
 		throw exception_etc(ths, func_node, err).raise();

@@ -201,7 +201,7 @@ public:
 	int LoadNativeModule(const string& module_name, string& errstr);
 	int ImportNativeModule(const string& module_name, const string& alias, AuxScope* frame, string& errstr);
 	bool ResolveNativeModuleFunction(const string& alias, const string& funcname, string& qualified_name) const;
-	int InvokeNativeModuleFunction(const string& qualified_name, AuxScope* past, bool has_receiver, const vector<CVar>& args, CVar& result, string& errstr);
+	int InvokeNativeModuleFunction(const string& qualified_name, AuxScope* past, bool has_receiver, bool dot_call, const vector<CVar>& args, CVar& result, string& errstr);
 	void InitErrorCodes();
 	string path_delimited_semicolon();
 	vector<string> InitBuiltInFunctionsExt(const vector<string>& externalModules);

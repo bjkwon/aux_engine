@@ -1,0 +1,170 @@
+// Regression test: assignment, indexing, cell/struct mutation, and intentional error paths.
+// Uses msg.eval so each syntax sample is both executable and loggable.
+function r = syntax_assignment_struct
+r.pass = 0
+r.fail = 0
+r.errpass = 0
+fs = getfs
+try
+	// Vector slice assignment and shape behavior.
+	a=[4 3 8 9 3 -1]
+	msg = "a(3:5)=-1:-3"
+	a(3:5)=-1:-3
+	r = test_check(r, a, [4 3 -1 -2 -3 -1], msg)
+	msg = "a(3:5)=0"
+	a(3:5)=0
+	r = test_check(r, a, [4 3 0 0 0 -1], msg)
+	msg = "a(3:5)=[0 1]"
+	a(3:5)=[0 1] // error to catch
+	msg = "a(3:5)=[]"
+	a(3:5)=[]
+	r = test_check(r, a, [4 3 -1], msg)
+	a = 1:7
+	msg = "a([2 3 5 6]) = 102:105 (non-contig)"
+	a([2 3 5 6]) = 102:105
+	r = test_check(r, a, [1 102 103 4 104 105 7], msg)
+	//========================
+	// 2-D indexing and mixed index forms (contiguous and non-contiguous).
+	x=(0:2:48).group(4)
+	msg="x=(0:2:48).group(4), x(4) = 6 ?"
+	r = test_check(r, x(4), 6, msg)
+	msg="x(2,3) = 16 ?"
+	r = test_check(r, x(2,3), 16, msg)	
+	msg = "x(2,3:6)=-2"
+	x(2,3:6)=-2
+	r = test_check(r, x(2,3:6), [-2 -2 -2 -2], msg)	
+	msg = "x(2,3:6)=1:4"
+	x(2,3:6)=1:4
+	r = test_check(r, x(2,3:6), [1:4], msg)	
+	msg = "x(1:3,2)=[0 0 0]'"
+	x(1:3,2)=[0 0 0]'
+	r = test_check(r, x(1:3,2)', [0 0 0], msg)	
+	msg = "x(1:3,2:3)=[9 9; 8 8; 7 7]"
+	x(1:3,2:3)=[9 9; 8 8; 7 7]
+	r = test_check(r, x(1:3,2:3), [9 9; 8 8; 7 7], msg)	
+	msg = "x([1 3 4],2:3)=[0 0; 2 2; 6 6]"
+	x([1 3 4],2:3)=[0 0; 2 2; 6 6]
+	r = test_check(r, x([1 3 4],2:3), [0 0; 2 2; 6 6], msg)	
+	//========================
+	// Audio time indexing/replacement and duration update checks.
+	x = noise(1000)@ - 40
+	printf("x = noise(1000)@ - 40\n")
+	msg = "x(10~510)=tone(400,500)@-10"
+	msg.eval
+	b=(x(10~510).rms+10).abs < 1.e-4
+	r = test_check_cond(r, b, msg)
+	msg = "x(10~510)=[]", msg.eval
+	r = test_check(r, x.dur, 500, msg)	
+	//=================================
+	// Cell indexing semantics: {} access, nested indexing, and audio in cells.
+	printf("x = { 33, ""bjk\"",tone(400,1000) }\n")
+	x = { 33, "bjk",tone(400,1000) }
+	msg="x{1}=1:2:10", msg.eval
+	r = test_check(r, x{1}(2), 3, msg)
+	msg="x{1}(2:3)=[222 333]", msg.eval
+	r = test_check(r, x{1}, [1 222 333 7 9], msg)
+	msg	="x{3}(10~510)=[]", msg.eval
+	r = test_check(r, x{3}.dur, 500, msg)	
+	msg	="x{3}(100~500)=silence(200)", msg.eval
+	b=(x{3}.rms+4.77121).abs < 1.e-4
+	r = test_check_cond(r, b, msg)
+	//=================================
+	// Intentional error cases: these should throw and be counted by catchback.
+	printf("Error Catching Test\n")
+  	msg = "audio_var(t1~t2)=vector"
+  	x = noise(1000); 
+  	x(40~50)=[1 2 3]
+  	a=1:10
+  	msg = "nonaudio_var(t1~t2)"
+  	a(40~50)
+  	msg = "nonaudio_var(t1~t2)=audio_obj"
+  	a(40~50) = silence(10)
+  	a={1:2:20, noise(1000)}
+  	msg = "cell_var(id)=new_cell_def"
+  	a(2)={1:2:20, noise(1000)}
+  	msg = "cell_var{id}=new_cell_def"
+  	a{2}={1:2:20, noise(1000)}
+  	clear(a)
+  	x = [3 2 -1 8 4]
+  	msg = "non_existent_var(id)=x.max"
+  	[a(2), y] = x.max
+  	a=1:3
+  	msg = "var(id)=x.max"
+  	[a(2), y] = x.max
+	msg = "vector=function_returning_one_output"
+	[x,y]=sum(a)
+	msg = "[a,b]=[3 2 -1 8 4].max", msg.eval
+	res = a==8 && b==4
+	r = test_check_cond(r, res, msg)
+	msg = "[a,b]=udf_ret_one_arg", msg.eval
+	msg = "[a,b]=udf_ret_two_arg", msg.eval
+	res = issame(a,"bj") && b==$true
+	r = test_check_cond(r, res, msg)
+	//=================================
+	// Struct member creation/chaining and compound assignment on deep members.
+	printf("Struct Tests...\n")
+	msg = "x.clear, x.prop1.prop2.prop3=[3 5 2]", msg.eval
+	msg = "x.prop1.prop2.prop3=[3 5 2], x.prop1.prop2.prop3.sum"
+	r = test_check(r, x.prop1.prop2.prop3.sum, 10, msg)
+	msg = "x.prop1.prop2.prop3+=10, x.prop1.prop2.prop3 // [13 15 12] confirmed", msg.eval
+	r = test_check(r, x.prop1.prop2.prop3, [13 15 12], msg)
+	msg = "x.prop1.prop2.prop3(2)=-50, x.prop1.prop2.prop3 // [13 -50 12] confirmed", msg.eval
+	r = test_check(r, x.prop1.prop2.prop3, [13 -50 12], msg)
+	msg = "x.clear, x.val(4)=100", msg.eval
+	msg = "x.clear, x=1:10, x.undef(4)=100", msg.eval
+	
+	msg = "x=""bjk"", x.val=200 //struct var with existing value", msg.eval
+	res0 = x=="bjk" // issame(x,"bjk") won't work. res0 should be [true true true]
+	res = res0.and && x.val==200
+	r = test_check_cond(r, res, msg)
+	
+	//=================================
+	// Compound operator on an indexed audio segment.
+	printf("Compound OP Tests...\n")
+	x=noise(1000)@-80;
+	msg = "x(10~11)@=-10", msg.eval
+	[a,tp]=x.max
+	vv = tp*1000/fs
+	b=vv > 10 && vv < 11.5 && a >.2
+	r = test_check_cond(r, b, msg)
+
+	printf("\n")
+	
+catchback me
+	// Any expected syntax/runtime error increments errpass, then execution continues.
+	msg0 = "PERR"
+	printf("%s: %s, %s\n", msg0, msg, me.body)
+	r.errpass += 1
+end
+
+// UDF with one output: used to validate "too many output arguments" handling.
+function out52 = udf_ret_one_arg
+out52 = 1
+// UDF with two outputs: used to validate multi-output assignment.
+function [out1,out2] = udf_ret_two_arg
+out1 = "bj"
+out2 = 1==1
+
+
+// Equality-based assertion helper.
+function r1 = test_check(r1,a1,a2,msg)
+if (issame(a1,a2))
+	r1.pass += 1
+	msg0 = "PASS"
+else
+	r1.fail += 1
+	msg0 = "FAIL"
+end
+printf("%s: %s\n", msg0, msg)
+
+
+// Boolean assertion helper.
+function r = test_check_cond(r,a,msg)
+if a
+	r.pass += 1
+	msg0 = "PASS"
+else
+	r.fail += 1
+	msg0 = "FAIL"
+end
+printf("%s: %s\n", msg0, msg)

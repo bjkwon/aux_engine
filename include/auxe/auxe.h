@@ -223,6 +223,8 @@ struct auxNativeModuleHost {
     int (*result_set_audio_mono)(auxNativeMutableValue result, const auxtype* values, size_t frames, int sample_rate) = nullptr;
     int (*result_set_audio_stereo)(auxNativeMutableValue result, const auxtype* left, const auxtype* right, size_t frames, int sample_rate) = nullptr;
     int (*value_sample_rate)(auxNativeValue value) = nullptr;
+    int (*result_set_bytes)(auxNativeMutableValue result, const unsigned char* values, size_t len) = nullptr;
+    int (*result_set_file)(auxNativeMutableValue result, const char* path, int preferred_sample_rate) = nullptr;
 };
 
 using auxNativeModuleInit = int(*)(const auxNativeModuleHost* host,

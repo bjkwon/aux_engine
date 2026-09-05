@@ -102,7 +102,8 @@ static std::string manifest_for(const std::string& name, const std::string& libr
       "    {\"name\": \"test_string\"},\n" +
       "    {\"name\": \"test_audio\"},\n" +
       "    {\"name\": \"test_fail\"},\n" +
-      "    {\"name\": \"test_noarg\"}\n" +
+      "    {\"name\": \"test_noarg\"},\n" +
+      "    {\"name\": \"test_static\"}\n" +
       "  ]\n" +
       "}\n";
 }
@@ -229,16 +230,23 @@ static bool case_good_module(const fs::path& root, std::string& err) {
   if (!expect_ok(s, "import(\"testmodule\")", err)) return false;
   if (!expect_error_contains(s, "g=test_add1(4)", "test_add1", err)) return false;
   if (!expect_ok(s, "x=testmodule.test_add1(4)", err) || !expect_scalar(s, "x", 5.0, err)) return false;
+  if (!expect_ok(s, "x=testmodule::test_add1(4)", err) || !expect_scalar(s, "x", 5.0, err)) return false;
+  if (!expect_ok(s, "r=4; x=r.testmodule::test_add1()", err) || !expect_scalar(s, "x", 5.0, err)) return false;
   if (!expect_ok(s, "v=testmodule.test_vec_add1([1 2 3])", err) || !expect_vector(s, "v", {2, 3, 4}, err)) return false;
+  if (!expect_ok(s, "v=[1 2 3].testmodule::test_vec_add1()", err) || !expect_vector(s, "v", {2, 3, 4}, err)) return false;
   if (!expect_ok(s, "s=testmodule.test_string(\"abc\")", err) || !expect_preview_contains(s, "s", "native:abc", err)) return false;
   if (!expect_ok(s, "a=testmodule.test_audio(0)", err) || !expect_audio(s, "a", err)) return false;
   if (!expect_ok(s, "n=testmodule.test_noarg()", err) || !expect_scalar(s, "n", 77.0, err)) return false;
+  if (!expect_ok(s, "st=testmodule::test_static(4)", err) || !expect_scalar(s, "st", 8.0, err)) return false;
+  if (!expect_error_contains(s, "r=4; st=r.testmodule::test_static()", "static native module function", err)) return false;
   if (!expect_error_contains(s, "z=testmodule.test_fail(0)", "intentional native failure", err)) return false;
 
   Session aliasSession;
   if (!aliasSession.ok()) { err = aliasSession.err; return false; }
   if (!expect_ok(aliasSession, "import(\"testmodule\",\"tm\")", err)) return false;
   if (!expect_ok(aliasSession, "x=tm.test_add1(8)", err) || !expect_scalar(aliasSession, "x", 9.0, err)) return false;
+  if (!expect_ok(aliasSession, "x=tm::test_add1(8)", err) || !expect_scalar(aliasSession, "x", 9.0, err)) return false;
+  if (!expect_ok(aliasSession, "r=8; x=r.tm::test_add1()", err) || !expect_scalar(aliasSession, "x", 9.0, err)) return false;
   if (!expect_error_contains(aliasSession, "x=testmodule.test_add1(8)", "testmodule", err)) return false;
   return true;
 }

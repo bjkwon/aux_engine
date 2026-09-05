@@ -307,4 +307,5 @@ if(AUXE_BUILD_TESTS)
     NAME auxe_regression_external_module
     COMMAND auxe_regression_external_module
   )
+
 endif()
