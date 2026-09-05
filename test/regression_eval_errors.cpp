@@ -637,6 +637,49 @@ static bool case_long_stereo_plus_equals_short_left_only_stereo(std::string& err
   return true;
 }
 
+static bool case_randperm_shuffles_full_range(std::string& err) {
+  Session s("case_randperm_shuffles_full_range");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "a=randperm(1200).group(20)", "grouped randperm") ||
+      !expect_eval_ok(s, "p=a.ungroup", "flatten grouped randperm")) {
+    err = s.err;
+    return false;
+  }
+  AuxObj obj = aux_get_var(s.ctx, "p");
+  std::vector<double> values(1200);
+  if (!obj || aux_vector_length(obj) != values.size() ||
+      aux_copy_vector(obj, values.data(), values.size()) != values.size()) {
+    err = "Expected 1200 permutation entries.";
+    return false;
+  }
+  std::vector<bool> seen(1200, false);
+  size_t fixed = 0;
+  for (size_t i = 0; i < values.size(); ++i) {
+    double v = values[i];
+    if (!std::isfinite(v) || v < 1 || v > 1200 || v != std::floor(v) || seen[static_cast<size_t>(v) - 1]) {
+      err = "Output must contain each integer from 1 to 1200 exactly once.";
+      return false;
+    }
+    seen[static_cast<size_t>(v) - 1] = true;
+    if (v == i + 1) ++fixed;
+  }
+  // The old 346-swap implementation leaves at least 508 fixed points.
+  // A uniform permutation has one on average; this generous bound avoids
+  // requiring a derangement or any particular random ordering.
+  if (fixed >= 100) {
+    err = "Too many untouched entries: " + std::to_string(fixed);
+    return false;
+  }
+  if (!expect_eval_ok(s, "single=randperm(1)", "singleton randperm") ||
+      !expect_vector_values(s, "single", {1.0}) ||
+      !expect_eval_error(s, "randperm(0)", "zero randperm") ||
+      !expect_eval_error(s, "randperm(-1)", "negative randperm")) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct TestCase {
     const char* name;
@@ -644,6 +687,7 @@ int main() {
   };
 
   const TestCase tests[] = {
+    {"case_randperm_shuffles_full_range", case_randperm_shuffles_full_range},
     {"case_empty_index_read_returns_null", case_empty_index_read_returns_null},
     {"case_zero_arg_parentheses_builtin_and_udf", case_zero_arg_parentheses_builtin_and_udf},
     {"case_group_overlap_uses_second_method_arg", case_group_overlap_uses_second_method_arg},

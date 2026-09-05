@@ -1,5 +1,7 @@
 #include "functions_common.h"
 #include <time.h>
+#include <algorithm>
+#include <random>
 
 Cfunction set_builtin_function_rand(fGate fp)
 {
@@ -122,26 +124,12 @@ void _randperm(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	int ival = (int)round(past->Sig.value());
 	if (ival < 1)
 		throw exception_func(*past, pnode, "argument must be positive", pnode->str, 1).raise();
-	static bool initialized(false);
-	if (!initialized)
-	{
-		srand((unsigned)time(0));
-		initialized = true;
-	}
+	static thread_local std::mt19937 generator(std::random_device{}());
 	past->Sig.Reset(1);
 	past->Sig.UpdateBuffer((size_t)ival);
-	int m, n;
-	float hold;
 	for (int i = 0; i < ival; i++)past->Sig.buf[i] = (float)(i + 1);
-	int repeat = (int)sqrt(ival * 100.); // swapping sqrt(ival*100.) times
-	for (int i = 0; i < repeat; i++)
-	{
-		m = (int)((float)rand() / (float)RAND_MAX * ival);
-		do { n = (int)((float)rand() / (float)RAND_MAX * ival); } while (m == n);
-		hold = past->Sig.buf[m];
-		past->Sig.buf[m] = past->Sig.buf[n];
-		past->Sig.buf[n] = hold;
-	}
+	// Shuffle the entire range with uniformly selected, in-bounds indices.
+	std::shuffle(past->Sig.buf, past->Sig.buf + ival, generator);
 	past->Sig.bufType = 'R';
 }
 
