@@ -17,7 +17,7 @@ using namespace std;
 #define TIME_UNIT_M 2
 #define TIME_UNIT_H 4
 
-#ifndef _WINDOWS
+#ifndef _WIN32
 #include <libgen.h>
 #define MAX_PATH 256
 #endif
@@ -25,7 +25,7 @@ using namespace std;
 int GetFileText(FILE* fp, string& strOut); // utils.cpp
 void auxe_close_native_modules(EngineRuntime& runtime); // native_module_loader.cpp
 
-#ifndef _WINDOWS
+#ifndef _WIN32
 static string preferred_relative_base_dir(const vector<string>& auxPaths)
 {
 	string cwd = get_current_dir();
@@ -2088,7 +2088,7 @@ AstNode* AuxScope::RegisterUDF(const AstNode* p, const char* fullfilename, const
 FILE* AuxScope::fopen_from_path(const string& fname, const string& ext, string& fullfilename)
 { // in in out
 	char extension[MAX_PATH] = {0};
-#ifdef _WINDOWS
+#ifdef _WIN32
 	char drive[64], dir[MAX_PATH], filename[MAX_PATH];
 	_splitpath(fname.c_str(), drive, dir, filename, extension);
 #else
@@ -2103,7 +2103,7 @@ FILE* AuxScope::fopen_from_path(const string& fname, const string& ext, string& 
 	if ((pdot == fname.npos || pdot < fname.length() - 4) && !extension[0])
 		_fname += "." + ext;
 
-#ifdef _WINDOWS
+#ifdef _WIN32
 	if (drive[0] + dir[0] > 0)
 #else
 	if (fname.find('/') != string::npos)
@@ -2338,7 +2338,7 @@ int EngineRuntime::RemovePath(const string& path0)
 string AuxScope::makefullfile(const string& fname, string extension)
 {
 	string fullfilename;
-#ifdef _WINDOWS
+#ifdef _WIN32
 	char drive[64], dir[MAX_PATH], file[MAX_PATH], ext[MAX_PATH];
 	_splitpath(fname.c_str(), drive, dir, file, ext);
 	if (drive[0] == 0 && dir[0] == 0) // no directory info or current directory

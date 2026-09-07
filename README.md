@@ -97,6 +97,10 @@ Install dependencies (Debian/Ubuntu names shown):
 sudo apt install libfftw3-dev libsamplerate0-dev nlohmann-json3-dev
 ```
 
+`nlohmann-json` is required in CMake **config mode**
+(`find_package(nlohmann_json CONFIG REQUIRED)`), so a bare header drop-in is not
+enough — install the distro `-dev` package or the vcpkg port.
+
 Build:
 (WSL)
 ```bash
@@ -109,6 +113,12 @@ cmake --build build-wsl -j
 cmake --install build-wsl
 ```
 
+Package (`TGZ`):
+
+```bash
+cmake --build build-wsl --target package
+```
+
 ---
 
 ## Build (Windows)
@@ -118,25 +128,28 @@ Recommended: **vcpkg** for third-party libraries.
 Example (PowerShell):
 
 ```powershell
-git clone https://github.com/microsoft/vcpkg
-cd vcpkg
-$VCPKG_ROOT = $PWD.Path
-.\bootstrap-vcpkg.bat
-.\vcpkg install fftw3 libsamplerate
+git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg
+C:\dev\vcpkg\bootstrap-vcpkg.bat
+$env:VCPKG_ROOT = "C:\dev\vcpkg"
+& "$env:VCPKG_ROOT\vcpkg.exe" install fftw3:x64-windows libsamplerate:x64-windows nlohmann-json:x64-windows
 ```
 
 Configure and build:
 
 ```powershell
-
-$TYPE="Debug"  #or $TYPE="Release"
+$TYPE="Release"  # or $TYPE="Debug"
 cmake -S . -B build -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE="VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DCMAKE_CONFIGURATION_TYPES="Debug;Release" `
   -DAUXE_BUILD_SHARED=ON
 
 cmake --build build --config $TYPE
 cmake --install build --config $TYPE --prefix .\install
 ```
+
+For a redistributable SDK archive — including the runtime DLL bundling, test
+gate, artifact verification, signing, and the ABI constraints that come with
+this header — follow [`RELEASE_WINDOWS.md`](RELEASE_WINDOWS.md).
 
 ---
 
@@ -145,11 +158,12 @@ cmake --install build --config $TYPE --prefix .\install
 A UI / front-end application should:
 
 - depend on auxe as:
-  - an installed package, or
-  - a git submodule
+  - an installed package (`find_package(auxe CONFIG REQUIRED)` +
+    `target_link_libraries(app PRIVATE auxe::auxe)`), or
+  - a sibling source tree pulled in with `add_subdirectory` (what `auxlab2` does)
 - include the public header:
   ```cpp
-  #include <auxe/aux2_core.h>
+  #include <auxe/auxe.h>
   ```
 - inject data explicitly (arrays, audio buffers, metadata)
 - retrieve results and handle presentation / persistence

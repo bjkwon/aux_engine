@@ -288,6 +288,12 @@ if(AUXE_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/test/native_module_fixture.cpp
   )
   target_include_directories(auxe_test_native_module PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  # The fixture declares auxe_module_init as plain `extern "C"`. On Windows that
+  # is not enough to put it in the DLL export table, so the loader's
+  # GetProcAddress("auxe_module_init") would fail. See docs/external_modules.md.
+  set_target_properties(auxe_test_native_module PROPERTIES
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
+  )
 
   add_library(auxe_test_native_no_entry SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/test/native_module_no_entry.cpp
@@ -308,4 +314,84 @@ if(AUXE_BUILD_TESTS)
     COMMAND auxe_regression_external_module
   )
 
+endif()
+
+# -----------------------------
+# SDK packaging
+#
+# Only active when auxe is the top-level project. auxlab2 (and other consumers)
+# pull auxe in with add_subdirectory() and own their own packaging, so the CPack
+# config below must not leak into their build.
+# -----------------------------
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  option(AUXE_ENABLE_CPACK "Enable CPack packaging of the auxe SDK" ON)
+  option(AUXE_BUNDLE_RUNTIME_DEPS "Bundle FFTW3/libsamplerate runtimes into the install tree" ON)
+  option(AUXE_ENABLE_WINDOWS_NSIS "Enable NSIS installer generation on Windows" OFF)
+
+  install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+    "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/auxe"
+  )
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs/"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/auxe/docs"
+  )
+
+  if(AUXE_BUNDLE_RUNTIME_DEPS AND AUXE_BUILD_SHARED)
+    set(AUXE_DEPLOY_SEARCH_DIRS "")
+    foreach(_p IN LISTS CMAKE_PREFIX_PATH)
+      list(APPEND AUXE_DEPLOY_SEARCH_DIRS "${_p}/bin" "${_p}/lib")
+    endforeach()
+    if(DEFINED ENV{VCPKG_ROOT})
+      list(APPEND AUXE_DEPLOY_SEARCH_DIRS
+        "$ENV{VCPKG_ROOT}/installed/x64-windows/bin"
+        "$ENV{VCPKG_ROOT}/installed/arm64-windows/bin"
+        "$ENV{VCPKG_ROOT}/installed/x64-linux/lib"
+        "$ENV{VCPKG_ROOT}/installed/x64-osx/lib"
+        "$ENV{VCPKG_ROOT}/installed/arm64-osx/lib"
+      )
+    endif()
+    list(APPEND AUXE_DEPLOY_SEARCH_DIRS
+      "/opt/homebrew/lib"
+      "/usr/local/lib"
+    )
+    list(REMOVE_DUPLICATES AUXE_DEPLOY_SEARCH_DIRS)
+
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AuxeRuntimeDeploy.cmake.in"
+      "${CMAKE_CURRENT_BINARY_DIR}/AuxeRuntimeDeploy.cmake"
+      @ONLY
+    )
+    install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/AuxeRuntimeDeploy.cmake")
+  endif()
+
+  if(AUXE_ENABLE_CPACK)
+    set(CPACK_PACKAGE_NAME "auxe")
+    set(CPACK_PACKAGE_VENDOR "auxlab")
+    set(CPACK_PACKAGE_CONTACT "release@auxlab.invalid")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "AUX Engine - C++17 engine for the AUX audio DSL")
+    set(CPACK_PACKAGE_VERSION "${AUXE_VERSION}")
+    set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+    set(CPACK_VERBATIM_VARIABLES ON)
+    # The SDK is a developer artifact; a flat <name>-<version>-<os> tree is what
+    # consumers point CMAKE_PREFIX_PATH at.
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "auxe")
+
+    if(WIN32)
+      set(CPACK_GENERATOR "ZIP")
+      if(AUXE_ENABLE_WINDOWS_NSIS)
+        list(APPEND CPACK_GENERATOR "NSIS")
+        set(CPACK_NSIS_DISPLAY_NAME "auxe SDK")
+        set(CPACK_NSIS_PACKAGE_NAME "auxe SDK")
+        set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+        set(CPACK_NSIS_MODIFY_PATH OFF)
+      endif()
+    else()
+      set(CPACK_GENERATOR "TGZ")
+    endif()
+
+    include(CPack)
+  endif()
 endif()

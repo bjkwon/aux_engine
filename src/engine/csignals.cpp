@@ -2898,11 +2898,6 @@ CSignals &CSignals::each(auxtype(*fn)(complex<auxtype>))
 	return *this;
 }
 
-#ifdef _WINDOWS
-
-
-#endif
-
 #ifndef NO_FFTW
 
 #endif

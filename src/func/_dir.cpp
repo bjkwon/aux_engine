@@ -121,7 +121,7 @@ void _dir(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	bool arg_ending_back_slash = false;
 
 	if (arg.empty()) arg += ".";
-#ifdef _WINDOWS
+#ifdef _WIN32
 	bool dot_or_dotdot = false;
 	if (arg == "." || "..") dot_or_dotdot = true;
 	if (arg.back() == DIRMARKER)

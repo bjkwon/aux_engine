@@ -8,8 +8,27 @@
 #include <iostream>
 #include <string>
 #include <system_error>
-#include <unistd.h>
 #include <vector>
+
+#ifdef _WIN32
+// MSVC has no <unistd.h>; the POSIX descriptor calls used by capture_stdout()
+// live in <io.h> under underscore-prefixed names.
+#include <fcntl.h>
+#include <io.h>
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
+using ssize_t = long long;
+static int pipe(int fds[2]) { return _pipe(fds, 4096, _O_BINARY); }
+static int dup(int fd) { return _dup(fd); }
+static int dup2(int fd1, int fd2) { return _dup2(fd1, fd2); }
+static int close(int fd) { return _close(fd); }
+static ssize_t read(int fd, void* buf, size_t n) {
+  return _read(fd, buf, static_cast<unsigned int>(n));
+}
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 

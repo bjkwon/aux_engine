@@ -140,6 +140,35 @@ The module must:
 - Return `0` on success.
 - Return nonzero on failure and write a short diagnostic to `err` when possible.
 
+### Exporting the entrypoint on Windows
+
+The loader resolves the symbol with `dlsym` on POSIX and `GetProcAddress` on
+Windows. `extern "C"` alone gives the symbol external linkage but does **not**
+put it in a DLL's export table, so on Windows the module must additionally be
+exported. Any of these works:
+
+```cpp
+#ifdef _WIN32
+#define AUXE_MODULE_EXPORT __declspec(dllexport)
+#else
+#define AUXE_MODULE_EXPORT
+#endif
+
+extern "C" AUXE_MODULE_EXPORT int auxe_module_init(/* ... */);
+```
+
+or, from CMake, without touching the source:
+
+```cmake
+set_target_properties(my_module PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+```
+
+or a `.def` file listing `auxe_module_init`. Without one of these, `import`
+fails on Windows with *"Module library does not export auxe_module_init"* even
+though the DLL loaded successfully. The in-tree fixture
+`test/native_module_fixture.cpp` relies on the `WINDOWS_EXPORT_ALL_SYMBOLS`
+form.
+
 Minimal shape:
 
 ```cpp

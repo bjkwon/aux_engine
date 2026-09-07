@@ -110,6 +110,8 @@ There is no repository-wide formatter or lint target. Match surrounding style an
 ## Documents To Consult
 
 - `README.md`: high-level project goals, dependency notes, and platform build examples. Check against code before copying details.
+- `RELEASE_WINDOWS.md`: Windows SDK packaging runbook (CPack ZIP), artifact verification, signing, and the C++-ABI constraints of the public header.
+- `docs/external_modules.md`: native module ABI, manifest format, and the Windows symbol-export requirement for `auxe_module_init`.
 - `HANDLE_RENAME_PLAN.md`: semantic background for handle/reference naming; note that the safe `TYPEBIT_HANDLE` rename is already reflected in code.
 - `GRAPHICS_RUNTIME_BACKEND_SPLIT.md`: authoritative boundary between runtime graphics semantics and GUI rendering.
 - `GRAPHICS_MIGRATION_ROADMAP.md`: graphics migration direction and success criteria; verify current implementation before treating items as pending.

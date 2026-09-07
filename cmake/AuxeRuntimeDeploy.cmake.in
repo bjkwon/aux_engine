@@ -1,0 +1,86 @@
+# Installed as part of the auxe SDK package.
+#
+# Copies the third-party runtime libraries auxe links against (FFTW3,
+# libsamplerate, and the compiler runtime on Windows) into the install tree so
+# the packaged SDK can be dropped onto a machine without vcpkg/Homebrew/distro
+# dev packages present.
+#
+# Only runs when auxe is configured as the top-level project. When auxe is
+# consumed via add_subdirectory() (as auxlab2 does), the consuming project owns
+# its own deployment step.
+
+set(_prefix "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+set(_search_dirs "@AUXE_DEPLOY_SEARCH_DIRS@")
+
+if(WIN32)
+  set(_runtime_dir "${_prefix}/@CMAKE_INSTALL_BINDIR@")
+  set(_auxe "${_runtime_dir}/auxe.dll")
+else()
+  set(_runtime_dir "${_prefix}/@CMAKE_INSTALL_LIBDIR@")
+  if(APPLE)
+    set(_auxe "${_runtime_dir}/libauxe.dylib")
+  else()
+    set(_auxe "${_runtime_dir}/libauxe.so")
+  endif()
+endif()
+
+list(APPEND _search_dirs
+  "${_prefix}/@CMAKE_INSTALL_BINDIR@"
+  "${_prefix}/@CMAKE_INSTALL_LIBDIR@"
+)
+list(REMOVE_DUPLICATES _search_dirs)
+
+if(NOT EXISTS "${_auxe}")
+  message(STATUS "auxe runtime deploy: ${_auxe} not present, skipping")
+  return()
+endif()
+
+message(STATUS "Collecting auxe runtime dependencies...")
+
+if(WIN32)
+  file(GET_RUNTIME_DEPENDENCIES
+    LIBRARIES "${_auxe}"
+    RESOLVED_DEPENDENCIES_VAR _resolved
+    UNRESOLVED_DEPENDENCIES_VAR _unresolved
+    DIRECTORIES ${_search_dirs}
+    PRE_EXCLUDE_REGEXES
+      "api-ms-win-.*"
+      "ext-ms-.*"
+    POST_EXCLUDE_REGEXES
+      "^[A-Za-z]:/Windows/.*"
+      "^[A-Za-z]:/WINDOWS/.*"
+      ".*/[Ss]ystem32/.*"
+  )
+elseif(APPLE)
+  file(GET_RUNTIME_DEPENDENCIES
+    LIBRARIES "${_auxe}"
+    RESOLVED_DEPENDENCIES_VAR _resolved
+    UNRESOLVED_DEPENDENCIES_VAR _unresolved
+    DIRECTORIES ${_search_dirs}
+    POST_EXCLUDE_REGEXES
+      "^/usr/lib/.*"
+      "^/System/Library/.*"
+  )
+else()
+  file(GET_RUNTIME_DEPENDENCIES
+    LIBRARIES "${_auxe}"
+    RESOLVED_DEPENDENCIES_VAR _resolved
+    UNRESOLVED_DEPENDENCIES_VAR _unresolved
+    DIRECTORIES ${_search_dirs}
+    POST_EXCLUDE_REGEXES
+      "^/lib.*"
+      "^/usr/lib.*"
+  )
+endif()
+
+if(_unresolved)
+  message(STATUS "auxe unresolved runtime deps (not bundled): ${_unresolved}")
+endif()
+
+foreach(_dep IN LISTS _resolved)
+  file(INSTALL
+    DESTINATION "${_runtime_dir}"
+    TYPE SHARED_LIBRARY
+    FILES "${_dep}"
+  )
+endforeach()
