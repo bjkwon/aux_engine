@@ -227,13 +227,11 @@ static bool case_zero_arg_parentheses_builtin_and_udf(std::string& err) {
                   "out = 7\n", s.err) ||
       !define_register(s, "zeroparen")) { err = s.err; return false; }
 
-  if (!expect_eval_ok(s, "fs1 = getfs", "fs1 = getfs") ||
+  if (!expect_eval_error(s, "fs1 = getfs", "fs1 = getfs") ||
       !expect_eval_ok(s, "fs2 = getfs()", "fs2 = getfs()") ||
-      !expect_eval_ok(s, "u1 = zeroparen", "u1 = zeroparen") ||
+      !expect_eval_error(s, "u1 = zeroparen", "u1 = zeroparen") ||
       !expect_eval_ok(s, "u2 = zeroparen()", "u2 = zeroparen()") ||
-      !expect_scalar_value(s, "fs1", 22050.0) ||
       !expect_scalar_value(s, "fs2", 22050.0) ||
-      !expect_scalar_value(s, "u1", 7.0) ||
       !expect_scalar_value(s, "u2", 7.0)) {
     err = s.err;
     return false;
@@ -428,9 +426,9 @@ static bool case_continue_skips_remaining_loop_body(std::string& err) {
     err = s.err;
     return false;
   }
-  if (!expect_eval_ok(s, "x = forcontinue", "forcontinue") ||
+  if (!expect_eval_ok(s, "x = forcontinue()", "forcontinue()") ||
       !expect_vector_values(s, "x", {1.0, 2.0, 4.0, 5.0}) ||
-      !expect_eval_ok(s, "w = whilecontinue", "whilecontinue") ||
+      !expect_eval_ok(s, "w = whilecontinue()", "whilecontinue()") ||
       !expect_vector_values(s, "w", {1.0, 2.0, 4.0, 5.0})) {
     err = s.err;
     return false;
@@ -680,6 +678,240 @@ static bool case_randperm_shuffles_full_range(std::string& err) {
   return true;
 }
 
+static bool case_class_internal_tag_hidden_from_preview_and_members(std::string& err) {
+  Session s("case_class_internal_tag_hidden_from_preview_and_members");
+  if (!s.ok()) { err = s.err; return false; }
+
+  const fs::path classFile = s.dir / "exclass.aux";
+  if (!write_file(classFile,
+                  "class exclass\n"
+                  "id=0\n"
+                  "name=\"\"\n"
+                  "grade\n"
+                  "method exclass(i,n)\n"
+                  "id=i\n"
+                  "name=n\n"
+                  "method out=myfunc(arg)\n"
+                  "out=name++sprintf(\"%d\",id)\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+
+  std::string preview;
+  if (aux_eval(&s.ctx, "u=exclass(1,\"z\")", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "Class instantiation failed: " + preview;
+    return false;
+  }
+  if (preview.find("__class") != std::string::npos) {
+    err = "Class preview should hide __class, got: " + preview;
+    return false;
+  }
+  if (preview.find(".id") == std::string::npos || preview.find(".name") == std::string::npos ||
+      preview.find(".grade") == std::string::npos) {
+    err = "Class preview should still show public members, got: " + preview;
+    return false;
+  }
+
+  AuxObj obj = aux_get_var(s.ctx, "u");
+  if (!obj) {
+    err = "Variable not found: u";
+    return false;
+  }
+  uint16_t type = 0;
+  std::string size;
+  if (aux_describe_var(s.ctx, obj, s.cfg, type, size, preview) != 0) {
+    err = "aux_describe_var failed for u";
+    return false;
+  }
+  if (size != "3") {
+    err = "Class object size should count visible members only, got size=" + size + ", preview=" + preview;
+    return false;
+  }
+  if (preview.find("__class") != std::string::npos) {
+    err = "Class variable preview should hide __class, got: " + preview;
+    return false;
+  }
+
+  const auto members = aux_get_struct(s.ctx, "u");
+  if (members.find("__class") != members.end() || members.find("id") == members.end() ||
+      members.find("name") == members.end() || members.find("grade") == members.end()) {
+    err = "aux_get_struct should return only visible class members.";
+    return false;
+  }
+
+  if (!expect_eval_ok(s, "u.grade=\"A\"", "write declared class member") ||
+      !expect_eval_error(s, "u.address=\"bogus\"", "write undeclared class member") ||
+      !expect_eval_error(s, "u.__class", "read reserved class metadata") ||
+      !expect_eval_error(s, "u.__class=\"bogus\"", "write reserved class metadata")) {
+    err = s.err;
+    return false;
+  }
+  if (aux_eval(&s.ctx, "out=u.myfunc(0)", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK) ||
+      preview.find("\"z1\"") == std::string::npos) {
+    err = "Class method call should return \"z1\", got: " + preview;
+    return false;
+  }
+
+  const fs::path badClassFile = s.dir / "badclass.aux";
+  if (!write_file(badClassFile,
+                  "class badclass\n"
+                  "__class=\"bogus\"\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  if (!expect_eval_error(s, "bad=badclass()", "declare reserved class metadata member")) {
+    err = s.err;
+    return false;
+  }
+
+  return true;
+}
+
+static bool case_class_without_constructor_requires_parentheses(std::string& err) {
+  Session s("case_class_without_constructor_requires_parentheses");
+  if (!s.ok()) { err = s.err; return false; }
+
+  const fs::path classFile = s.dir / "emptyctor.aux";
+  if (!write_file(classFile,
+                  "class emptyctor\n"
+                  "id=3\n"
+                  "name=\"default\"\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+
+  std::string preview;
+  if (aux_eval(&s.ctx, "u=emptyctor()", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "Class without constructor should instantiate with empty parentheses: " + preview;
+    return false;
+  }
+  if (preview.find(".id") == std::string::npos || preview.find(".name") == std::string::npos) {
+    err = "Class without constructor should expose declared defaults, got: " + preview;
+    return false;
+  }
+  if (!expect_eval_error(s, "v=emptyctor", "class constructor without parentheses")) {
+    err = s.err;
+    return false;
+  }
+
+  return true;
+}
+
+static bool case_standalone_method_udf_is_rejected(std::string& err) {
+  Session s("case_standalone_method_udf_is_rejected");
+  if (!s.ok()) { err = s.err; return false; }
+
+  const fs::path udfFile = s.dir / "myfunc.aux";
+  if (!write_file(udfFile,
+                  "method out=myfunc(arg)\n"
+                  "out=arg\n"
+                  "end\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+
+  std::string defineErr;
+  if (aux_define_udf(s.ctx, "myfunc", s.dir.string(), defineErr) == 0) {
+    err = "aux_define_udf should reject a standalone method definition.";
+    return false;
+  }
+  if (defineErr.find("Standalone UDF files cannot start with \"method\" or \"member function\"") == std::string::npos) {
+    err = "Unexpected aux_define_udf error: " + defineErr;
+    return false;
+  }
+
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+  if (!expect_eval_error(s, "x=myfunc(1)", "lazy standalone method load")) {
+    err = s.err;
+    return false;
+  }
+
+  return true;
+}
+
+static bool case_standalone_member_function_udf_is_rejected(std::string& err) {
+  Session s("case_standalone_member_function_udf_is_rejected");
+  if (!s.ok()) { err = s.err; return false; }
+
+  const fs::path udfFile = s.dir / "myfunc.aux";
+  if (!write_file(udfFile,
+                  "member function out=myfunc(arg)\n"
+                  "out=arg\n"
+                  "end\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+
+  std::string defineErr;
+  if (aux_define_udf(s.ctx, "myfunc", s.dir.string(), defineErr) == 0) {
+    err = "aux_define_udf should reject a standalone member function definition.";
+    return false;
+  }
+  if (defineErr.find("Standalone UDF files cannot start with \"method\" or \"member function\"") == std::string::npos) {
+    err = "Unexpected aux_define_udf error: " + defineErr;
+    return false;
+  }
+
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+  if (!expect_eval_error(s, "x=myfunc(1)", "lazy standalone member function load")) {
+    err = s.err;
+    return false;
+  }
+
+  return true;
+}
+
+static bool case_class_member_function_definition_is_rejected(std::string& err) {
+  Session s("case_class_member_function_definition_is_rejected");
+  if (!s.ok()) { err = s.err; return false; }
+
+  const fs::path classFile = s.dir / "badmethod.aux";
+  if (!write_file(classFile,
+                  "class badmethod\n"
+                  "id=0\n"
+                  "member function out=myfunc(arg)\n"
+                  "out=arg\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+
+  std::string preview;
+  if (aux_eval(&s.ctx, "x=badmethod(1)", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR)) {
+    err = "Class member function definition should have returned AUX_EVAL_ERROR, preview=" + preview;
+    return false;
+  }
+  if (preview.find("Class methods must use \"method\"") == std::string::npos) {
+    err = "Unexpected class member function error: " + preview;
+    return false;
+  }
+
+  return true;
+}
+
 int main() {
   struct TestCase {
     const char* name;
@@ -687,6 +919,11 @@ int main() {
   };
 
   const TestCase tests[] = {
+    {"case_class_internal_tag_hidden_from_preview_and_members", case_class_internal_tag_hidden_from_preview_and_members},
+    {"case_class_without_constructor_requires_parentheses", case_class_without_constructor_requires_parentheses},
+    {"case_standalone_method_udf_is_rejected", case_standalone_method_udf_is_rejected},
+    {"case_standalone_member_function_udf_is_rejected", case_standalone_member_function_udf_is_rejected},
+    {"case_class_member_function_definition_is_rejected", case_class_member_function_definition_is_rejected},
     {"case_randperm_shuffles_full_range", case_randperm_shuffles_full_range},
     {"case_empty_index_read_returns_null", case_empty_index_read_returns_null},
     {"case_zero_arg_parentheses_builtin_and_udf", case_zero_arg_parentheses_builtin_and_udf},

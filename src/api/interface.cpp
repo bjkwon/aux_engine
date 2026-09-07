@@ -11,6 +11,8 @@
 #include <cmath>
 #include <atomic>
 #include <exception>
+#include <cctype>
+#include <cstring>
 #include "AuxScope.h"
 #include "AuxScope_exception.h"
 #include <auxe/auxe.h>
@@ -39,6 +41,77 @@ static inline const CVar* asCVar(AuxObj h) {
 
 static inline const CSignals* asCSignals(AuxObj h) {
     return reinterpret_cast<const CSignals*>(h);
+}
+
+static bool is_hidden_struct_member(const string& name)
+{
+    return name == "__class";
+}
+
+static bool api_is_ident_char(char ch)
+{
+    unsigned char u = static_cast<unsigned char>(ch);
+    return std::isalnum(u) || ch == '_' || ch == '?';
+}
+
+static bool api_starts_with_keyword(const std::string& s, size_t i, size_t end, const char* kw)
+{
+    const size_t n = strlen(kw);
+    if (i + n > end) return false;
+    if (i > 0 && api_is_ident_char(s[i - 1])) return false;
+    for (size_t k = 0; k < n; ++k) {
+        if (std::tolower(static_cast<unsigned char>(s[i + k])) != kw[k]) return false;
+    }
+    if (i + n < s.size() && api_is_ident_char(s[i + n])) return false;
+    return true;
+}
+
+static bool api_first_code_line_starts_with_keyword(const std::string& src, const char* keyword)
+{
+    std::stringstream ss(src);
+    std::string line;
+    while (std::getline(ss, line)) {
+        size_t first = line.find_first_not_of(" \t\r");
+        if (first == std::string::npos) continue;
+        line.erase(0, first);
+        size_t last = line.find_last_not_of(" \t\r");
+        if (last != std::string::npos)
+            line.erase(last + 1);
+        if (line.rfind("//", 0) == 0) continue;
+        return api_starts_with_keyword(line, 0, line.size(), keyword);
+    }
+    return false;
+}
+
+static size_t api_skip_spaces(const std::string& s, size_t i, size_t end)
+{
+    while (i < end && (s[i] == ' ' || s[i] == '\t')) ++i;
+    return i;
+}
+
+static bool api_line_starts_with_member_function(const std::string& line)
+{
+    if (!api_starts_with_keyword(line, 0, line.size(), "member"))
+        return false;
+    size_t i = api_skip_spaces(line, 6, line.size());
+    return api_starts_with_keyword(line, i, line.size(), "function");
+}
+
+static bool api_first_code_line_starts_with_member_function(const std::string& src)
+{
+    std::stringstream ss(src);
+    std::string line;
+    while (std::getline(ss, line)) {
+        size_t first = line.find_first_not_of(" \t\r");
+        if (first == std::string::npos) continue;
+        line.erase(0, first);
+        size_t last = line.find_last_not_of(" \t\r");
+        if (last != std::string::npos)
+            line.erase(last + 1);
+        if (line.rfind("//", 0) == 0) continue;
+        return api_line_starts_with_member_function(line);
+    }
+    return false;
 }
 
 static CVar make_audio_cvar_from_payload(const auxRecordCallbackPayload& payload)
@@ -405,7 +478,12 @@ static std::string format_non_audio_size(const CVar* v)
         return std::to_string(v->cell.size());
     }
     if (ISSTRUT(t)) {
-        return std::to_string(v->strut.size());
+        size_t visible = 0;
+        for (const auto& entry : v->strut) {
+            if (!is_hidden_struct_member(entry.first))
+                ++visible;
+        }
+        return std::to_string(visible);
     }
 
     const uint64_t len = v->Len();
@@ -1048,7 +1126,11 @@ map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname)
 
     if (ISSTRUT(t)) {
         for (const auto& v : cv->strut)
+        {
+            if (is_hidden_struct_member(v.first))
+                continue;
             out[v.first] = reinterpret_cast<AuxObj>(&v.second);
+        }
     }
     return out;
 }
@@ -1235,6 +1317,11 @@ int aux_define_udf(auxContext* ctx, const string& udfname, const string& udfpath
     if (file.bad()) {
         errstr = "Error: failed while reading ";
         errstr += fullpath;
+        return 1;
+    }
+    if (api_first_code_line_starts_with_keyword(filecontent, "method") ||
+        api_first_code_line_starts_with_member_function(filecontent)) {
+        errstr = "Error: Standalone UDF files cannot start with \"method\" or \"member function\". Use \"function\" for a UDF or place a \"method\" inside a class definition.";
         return 1;
     }
 

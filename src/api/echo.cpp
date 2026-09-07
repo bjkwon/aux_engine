@@ -33,6 +33,11 @@ static string echo(int depth, const CVar& sig, int display_precision, int displa
 	return EO.print(sig, 0);
 }
 
+static bool is_hidden_struct_member(const string& name)
+{
+	return name == "__class";
+}
+
 //[ 5  3 2 -1 9 83 7 62 9 7 6 8 9 7 3 2 -1]
 string show_preview(const CVar& sig, int display_precision, int display_limit_x, int display_limit_y, int display_limit_bytes)
 {
@@ -125,6 +130,8 @@ string echo_struct::print(const CVar& obj, const string& head)
 	}
 	for (map<string, CVar>::const_iterator it = obj.strut.begin(); it != obj.strut.end(); it++)
 	{
+		if (is_hidden_struct_member(it->first))
+			continue;
 		ostringstream var0;
 		var0 << '.' << it->first;
 		out += var0.str();

@@ -10,8 +10,44 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <algorithm>
 
 static const int AST_FLAG_ASYNC_ASSIGN = AST_SUPPRESS_ASYNC_ASSIGN;
+
+static std::string lower_copy_process(const std::string& in)
+{
+	std::string out = in;
+	std::transform(out.begin(), out.end(), out.begin(), ::tolower);
+	return out;
+}
+
+static bool is_reserved_class_member_name(const std::string& name)
+{
+	return lower_copy_process(name) == "__class";
+}
+
+static bool get_object_class_key_process(const CVar* pBase, std::string& class_key)
+{
+	if (!pBase) return false;
+	auto it = pBase->strut.find("__class");
+	if (it == pBase->strut.end()) return false;
+	if (!ISSTRINGG(it->second.type())) return false;
+	class_key = lower_copy_process(it->second.str());
+	return !class_key.empty();
+}
+
+static bool class_has_declared_member_process(const EngineRuntime* env, const CVar* pBase, const std::string& member_name)
+{
+	std::string class_key;
+	if (!get_object_class_key_process(pBase, class_key))
+		return true;
+	if (!env)
+		return false;
+	auto cfd = env->classes.find(class_key);
+	if (cfd == env->classes.end())
+		return false;
+	return cfd->second.defaults.find(member_name) != cfd->second.defaults.end();
+}
 
 namespace {
 struct AsyncAssignJob {
@@ -460,8 +496,12 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 		map<std::string, CVar>::iterator itvar;
 		for (pvarLHS = &(it->second); plhs->alt && plhs->alt->type == N_STRUCT; plhs = plhs->alt) {
 			*pstruct = plhs->alt;
+			if (is_reserved_class_member_name(plhs->alt->str))
+				throw exception_misuse(*this, plhs->alt, string(".") + plhs->alt->str + " is reserved for internal class metadata.").raise();
 			itvar = ((CVar*)pvarLHS)->strut.find(plhs->alt->str);
 			if (itvar == pvarLHS->strut.end()) {
+				if (!class_has_declared_member_process(pEnv, pvarLHS, plhs->alt->str))
+					throw exception_misuse(*this, plhs->alt, string("Cannot add undeclared member .") + plhs->alt->str + " to class object.").raise();
 				bool wantRight = !strcmp(plhs->alt->str, "right");
 				if (ISAUDIO(pvarLHS->type()) && (wantRight || !strcmp(plhs->alt->str, "left"))) {
 					// .left/.right on the LHS select a single channel to write into directly

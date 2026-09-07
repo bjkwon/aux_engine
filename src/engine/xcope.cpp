@@ -64,6 +64,7 @@ static int count_time_unit_bits(int mask)
 static const int UDF_DECL_REGULAR = 2;
 static const int UDF_DECL_STATIC = 3;
 static const int UDF_DECL_MEMBER = 4;
+static const int AST_FLAG_EXPLICIT_ZERO_ARG_CALL = 1 << 21;
 
 static double unit_mask_to_ms_scale(int mask)
 {
@@ -105,6 +106,11 @@ static std::string lower_copy(const std::string& in)
 	return out;
 }
 
+static bool is_reserved_class_member_name(const std::string& name)
+{
+	return lower_copy(name) == "__class";
+}
+
 static bool is_blank_or_comment_line(const std::string& line)
 {
 	auto t = line;
@@ -112,16 +118,81 @@ static bool is_blank_or_comment_line(const std::string& line)
 	return t.empty() || t.rfind("//", 0) == 0;
 }
 
-static bool parse_member_declaration(const std::string& trimmed, std::string& name, std::string& expr)
+static std::string strip_line_comment(const std::string& line)
+{
+	std::string out = line;
+	bool in_string = false;
+	for (size_t i = 0; i + 1 < out.size(); ++i)
+	{
+		if (out[i] == '"')
+			in_string = !in_string;
+		if (!in_string && out[i] == '/' && out[i + 1] == '/')
+		{
+			out.erase(i);
+			break;
+		}
+	}
+	trim(out, string(" \t\r"));
+	return out;
+}
+
+static bool first_code_line_starts_with_keyword(const std::string& src, const char* keyword)
+{
+	std::stringstream ss(src);
+	std::string line;
+	while (std::getline(ss, line))
+	{
+		trim(line, string(" \t\r"));
+		if (line.empty() || line.rfind("//", 0) == 0)
+			continue;
+		return starts_with_keyword(line, 0, line.size(), keyword);
+	}
+	return false;
+}
+
+static bool line_starts_with_member_function(const std::string& trimmed)
 {
 	if (!starts_with_keyword(trimmed, 0, trimmed.size(), "member"))
 		return false;
 	size_t i = skip_spaces(trimmed, 6, trimmed.size());
-	size_t eq = trimmed.find('=', i);
-	if (eq == std::string::npos)
+	return starts_with_keyword(trimmed, i, trimmed.size(), "function");
+}
+
+static bool first_code_line_starts_with_member_function(const std::string& src)
+{
+	std::stringstream ss(src);
+	std::string line;
+	while (std::getline(ss, line))
+	{
+		trim(line, string(" \t\r"));
+		if (line.empty() || line.rfind("//", 0) == 0)
+			continue;
+		return line_starts_with_member_function(line);
+	}
+	return false;
+}
+
+static bool parse_member_declaration(const std::string& trimmed, std::string& name, std::string& expr)
+{
+	std::string work = strip_line_comment(trimmed);
+	size_t i = 0;
+	if (starts_with_keyword(work, 0, work.size(), "member"))
+		i = skip_spaces(work, 6, work.size());
+	if (i >= work.size() || !is_ident_char(work[i]) || std::isdigit((unsigned char)work[i]))
 		return false;
-	name = trimmed.substr(i, eq - i);
-	expr = trimmed.substr(eq + 1);
+	size_t name_end = i + 1;
+	while (name_end < work.size() && is_ident_char(work[name_end]))
+		++name_end;
+	name = work.substr(i, name_end - i);
+	size_t rest = skip_spaces(work, name_end, work.size());
+	if (rest >= work.size())
+	{
+		expr.clear();
+		return !name.empty();
+	}
+	if (work[rest] != '=')
+		return false;
+	expr = work.substr(rest + 1);
 	trim(name, string(" \t\r"));
 	trim(expr, string(" \t\r"));
 	return !name.empty();
@@ -168,6 +239,30 @@ static bool get_object_class_key(const CVar* pBase, std::string& class_key)
 	return !class_key.empty();
 }
 
+static bool class_has_declared_member(const EngineRuntime* env, const CVar* pBase, const std::string& member_name)
+{
+	std::string class_key;
+	if (!get_object_class_key(pBase, class_key))
+		return true;
+	if (!env)
+		return false;
+	auto cfd = env->classes.find(class_key);
+	if (cfd == env->classes.end())
+		return false;
+	return cfd->second.defaults.find(member_name) != cfd->second.defaults.end();
+}
+
+static bool class_has_method(const EngineRuntime* env, const CVar* pBase, const std::string& method_name)
+{
+	std::string class_key;
+	if (!get_object_class_key(pBase, class_key) || !env)
+		return false;
+	auto cfd = env->classes.find(class_key);
+	if (cfd == env->classes.end())
+		return false;
+	return cfd->second.methods.find(lower_copy(method_name)) != cfd->second.methods.end();
+}
+
 static std::string preprocess_member_function_syntax(const std::string& src, std::set<int>& member_function_lines)
 {
 	std::string out = src;
@@ -203,26 +298,18 @@ static std::string preprocess_member_function_syntax(const std::string& src, std
 	return out;
 }
 
-static bool is_known_zero_arg_callable(const EngineRuntime* env, const std::string& name)
-{
-	if (!env || name.empty())
-		return false;
-	auto bit = env->builtin.find(name);
-	if (bit != env->builtin.end())
-		return bit->second.narg1 == 0 && bit->second.narg2 == 0;
-	auto uit = env->udf.find(lower_copy(name));
-	if (uit == env->udf.end() || !uit->second.uxtree || !uit->second.uxtree->child)
-		return false;
-	AstNode* formals = uit->second.uxtree->child;
-	return formals->type == N_IDLIST && formals->child == nullptr;
-}
-
-static std::string preprocess_zero_arg_call_syntax(const std::string& src, const EngineRuntime* env)
+static std::string preprocess_zero_arg_call_syntax(const std::string& src, std::set<std::pair<int, std::string>>& zero_arg_call_sites)
 {
 	std::string out = src;
 	bool in_string = false;
+	int line = 1;
 	for (size_t i = 0; i < out.size(); ++i)
 	{
+		if (out[i] == '\n')
+		{
+			++line;
+			continue;
+		}
 		if (out[i] == '"')
 		{
 			in_string = !in_string;
@@ -233,6 +320,10 @@ static std::string preprocess_zero_arg_call_syntax(const std::string& src, const
 		if (out[i] == '/' && i + 1 < out.size() && out[i + 1] == '/')
 		{
 			while (i < out.size() && out[i] != '\n') ++i;
+			if (i < out.size())
+			{
+				++line;
+			}
 			continue;
 		}
 		if (!is_ident_char(out[i]) || std::isdigit((unsigned char)out[i]) || out[i] == '?')
@@ -241,15 +332,14 @@ static std::string preprocess_zero_arg_call_syntax(const std::string& src, const
 		const size_t name_begin = i;
 		while (i < out.size() && is_ident_char(out[i])) ++i;
 		const size_t name_end = i;
-		std::string name = out.substr(name_begin, name_end - name_begin);
+		std::string name = lower_copy(out.substr(name_begin, name_end - name_begin));
 		size_t open = skip_spaces(out, name_end, out.size());
 		if (open >= out.size() || out[open] != '(')
 			continue;
 		size_t close = skip_spaces(out, open + 1, out.size());
 		if (close >= out.size() || out[close] != ')')
 			continue;
-		if (!is_known_zero_arg_callable(env, name))
-			continue;
+		zero_arg_call_sites.insert({ line, name });
 		for (size_t k = open; k <= close; ++k)
 			out[k] = ' ';
 		i = close;
@@ -295,6 +385,18 @@ static void mark_member_function_nodes(AstNode* p, const std::set<int>& member_f
 	}
 }
 
+static void mark_explicit_zero_arg_call_nodes(AstNode* p, const std::set<std::pair<int, std::string>>& zero_arg_call_sites)
+{
+	for (; p; p = p->next)
+	{
+		if ((p->type == T_ID || p->type == N_STRUCT || p->type == N_CALL) && p->str &&
+			zero_arg_call_sites.find({ p->line, lower_copy(p->str) }) != zero_arg_call_sites.end())
+			p->suppress |= AST_FLAG_EXPLICIT_ZERO_ARG_CALL;
+		if (p->child) mark_explicit_zero_arg_call_nodes(p->child, zero_arg_call_sites);
+		if (p->alt) mark_explicit_zero_arg_call_nodes(p->alt, zero_arg_call_sites);
+	}
+}
+
 static bool parse_class_source(
 	const std::string& src,
 	std::string& class_name_lower,
@@ -314,16 +416,11 @@ static bool parse_class_source(
 		return false;
 	}
 	int class_header = -1;
-	int class_end = -1;
 	for (int i = 0; i < (int)lines.size(); ++i)
 	{
 		if (!is_blank_or_comment_line(lines[i])) { class_header = i; break; }
 	}
-	for (int i = (int)lines.size() - 1; i >= 0; --i)
-	{
-		if (!is_blank_or_comment_line(lines[i])) { class_end = i; break; }
-	}
-	if (class_header < 0 || class_end < class_header) {
+	if (class_header < 0) {
 		emsg = "Class file has no class definition.";
 		return false;
 	}
@@ -343,23 +440,37 @@ static bool parse_class_source(
 		}
 		class_name_lower = lower_copy(name);
 	}
-	{
-		auto t = lines[class_end];
-		trim(t, string(" \t\r"));
-		if (!is_end_line(t)) {
-			emsg = "Class definition must end with \"end\".";
-			return false;
-		}
-	}
-	for (int i = class_header + 1; i < class_end; ++i)
+	for (int i = class_header + 1; i < (int)lines.size(); )
 	{
 		auto t = lines[i];
 		trim(t, string(" \t\r"));
-		if (t.empty() || t.rfind("//", 0) == 0) continue;
+		if (t.empty() || t.rfind("//", 0) == 0) { ++i; continue; }
+		if (is_end_line(t))
+		{
+			for (int j = i + 1; j < (int)lines.size(); ++j)
+			{
+				if (!is_blank_or_comment_line(lines[j]))
+				{
+					emsg = "Unexpected class item after class end: " + strip_line_comment(lines[j]);
+					return false;
+				}
+			}
+			break;
+		}
+		if (line_starts_with_member_function(t))
+		{
+			emsg = "Class methods must use \"method\", not \"member function\".";
+			return false;
+		}
 		std::string mname, mexpr;
 		if (parse_member_declaration(t, mname, mexpr))
 		{
+			if (is_reserved_class_member_name(mname)) {
+				emsg = "Reserved class member name: " + mname;
+				return false;
+			}
 			members.push_back({ mname, mexpr });
+			++i;
 			continue;
 		}
 		if (starts_with_keyword(t, 0, t.size(), "method"))
@@ -372,24 +483,32 @@ static bool parse_class_source(
 			}
 			std::ostringstream method_src;
 			method_src << "member function " << header_rest << "\n";
-			int depth = 1;
-			for (++i; i < class_end; ++i)
+			int depth = 0;
+			bool consumed_legacy_end = false;
+			int j = i + 1;
+			for (; j < (int)lines.size(); ++j)
 			{
-				auto u = lines[i];
+				auto u = lines[j];
 				trim(u, string(" \t\r"));
 				if (is_blank_or_comment_line(u)) continue;
-				if (is_block_begin_line(u)) ++depth;
-				if (is_end_line(u)) {
-					--depth;
-					if (depth == 0) break; // class-style method terminator; do not copy
+				if (depth == 0 && starts_with_keyword(u, 0, u.size(), "method"))
+					break;
+				if (depth == 0 && is_end_line(u)) {
+					consumed_legacy_end = true;
+					break;
 				}
-				method_src << lines[i] << "\n";
+				if (is_end_line(u))
+					--depth;
+				method_src << lines[j] << "\n";
+				if (!is_end_line(u) && is_block_begin_line(u))
+					++depth;
 			}
 			if (depth != 0) {
 				emsg = "Method \"" + method_name_lower + "\" has unmatched end.";
 				return false;
 			}
 			methods.push_back({ method_name_lower, method_src.str() });
+			i = consumed_legacy_end ? j + 1 : j;
 			continue;
 		}
 		emsg = "Unknown top-level class item: " + t;
@@ -627,9 +746,10 @@ AstNode* AuxScope::makenodes(const string& instr)
 	char* errmsg;
 	if (instr.empty()) return node;
 	std::set<int> member_function_lines;
+	std::set<std::pair<int, std::string>> zero_arg_call_sites;
 	std::string parser_input = preprocess_member_function_syntax(instr, member_function_lines);
+	parser_input = preprocess_zero_arg_call_syntax(parser_input, zero_arg_call_sites);
 	parser_input = preprocess_module_scope_syntax(parser_input);
-	parser_input = preprocess_zero_arg_call_syntax(parser_input, pEnv);
 	if (nodeAllocated) {
 		yydeleteAstNode(node, 0);
 		nodeAllocated = false;
@@ -643,6 +763,8 @@ AstNode* AuxScope::makenodes(const string& instr)
 	res = yyparse(&out, &errmsg);
 	if (out && !member_function_lines.empty())
 		mark_member_function_nodes(out, member_function_lines);
+	if (out && !zero_arg_call_sites.empty())
+		mark_explicit_zero_arg_call_nodes(out, zero_arg_call_sites);
 	nodeAllocated = out ? true : false;
 	if (!errmsg && res == 2)
 	{
@@ -1046,9 +1168,13 @@ static bool ensure_class_loaded(AuxScope& ths, const std::string& class_name_low
 
 static bool try_instantiate_class_call(AuxScope& ths, const AstNode* pCalling, CVar& out, std::string& emsg)
 {
-	if (!pCalling || pCalling->type != T_ID || !pCalling->str)
+	if (!pCalling || !pCalling->str)
 		return false;
-	if (!(pCalling->alt && pCalling->alt->type == N_ARGS))
+	if (pCalling->type != T_ID && pCalling->type != N_CALL)
+		return false;
+	if (pCalling->type == T_ID &&
+		!(pCalling->alt && pCalling->alt->type == N_ARGS) &&
+		!(pCalling->suppress & AST_FLAG_EXPLICIT_ZERO_ARG_CALL))
 		return false;
 	std::string class_key = lower_copy(pCalling->str);
 	if (!ensure_class_loaded(ths, class_key, emsg))
@@ -1067,14 +1193,26 @@ static bool try_instantiate_class_call(AuxScope& ths, const AstNode* pCalling, C
 	class_name_holder.SetString(class_key.c_str());
 	out.strut["__class"] = class_name_holder;
 
-	if (it->second.methods.find("init") != it->second.methods.end())
+	std::string ctor_name = class_key;
+	if (it->second.methods.find(ctor_name) == it->second.methods.end())
+		ctor_name = "init";
+	if (it->second.methods.find(ctor_name) != it->second.methods.end())
 	{
 		AstNode fake = *pCalling;
 		fake.type = N_STRUCT;
-		fake.str = (char*)"init";
+		fake.str = (char*)ctor_name.c_str();
 		ths.PrepareAndCallUDF(&fake, &out);
 	}
 	return true;
+}
+
+static bool has_explicit_call_args(const AstNode* pnode)
+{
+	if (!pnode)
+		return false;
+	return pnode->type == N_CALL ||
+		(pnode->suppress & AST_FLAG_EXPLICIT_ZERO_ARG_CALL) ||
+		(pnode->alt && pnode->alt->type == N_ARGS);
 }
 
 static bool try_call_native_module_function(AuxScope& ths, AstNode* ptree, CVar** psigBase, AstNode** pnext)
@@ -1159,6 +1297,8 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 		return module_next;
 	if ((ptree->type == T_ID || ptree->type == N_CALL || ptree->type == N_STRUCT) && pEnv->IsValidBuiltin(ptree->str))
 	{
+		if (ptree->type == T_ID && !has_explicit_call_args(ptree))
+			throw exception_etc(*this, ptree, string(ptree->str) + "() requires parentheses for a zero-argument function call.").raise();
 		AstNode* channelSelectorIndex = nullptr;
 		if (is_channel_selector_suffix(ptree) && ptree->alt &&
 			(ptree->alt->type == N_ARGS || ptree->alt->type == N_TIME_EXTRACT))
@@ -1234,9 +1374,20 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 			}
 			if (!class_err.empty())
 				throw exception_etc(*this, ptree, class_err.c_str()).raise();
+			if (ptree->type == N_STRUCT && *psigBase && class_has_method(pEnv, *psigBase, ptree->str))
+			{
+				if (ptree->child)	throw_LHS_lvalue(ptree, true);
+				PrepareAndCallUDF(ptree, *psigBase);
+				*psigBase = &Sig;
+				if (ptree->alt && (ptree->alt->type == N_ARGS || IsConditional(ptree->alt)))
+					ptree = ptree->alt;
+				return get_next_parsible_node(ptree);
+			}
 			AstNode* t_func;
 			if ((t_func = ReadUDF(emsg, string(ptree->str))))
 			{
+				if (ptree->type == T_ID && !has_explicit_call_args(ptree))
+					throw exception_etc(*this, ptree, string(ptree->str) + "() requires parentheses for a zero-argument function call.").raise();
 				if (ptree->child)	throw_LHS_lvalue(ptree, true);
 				// if static function, psigBase must be NULL
 				if (t_func->suppress == UDF_DECL_STATIC && *psigBase)
@@ -1341,6 +1492,8 @@ void AuxScope::bind_psig(AstNode* pn, CVar* psig)
 	else
 	{
 		assert(pn->alt->type == N_STRUCT);
+		if (is_reserved_class_member_name(pn->alt->str))
+			throw exception_misuse(*this, pn->alt, string(".") + pn->alt->str + " is reserved for internal class metadata.").raise();
 		CVar* pbasesig = GetVariable(pn->str, pn);
 		SetVar(pn->alt->str, psig, pbasesig);
 	}
@@ -1422,6 +1575,8 @@ CVar* AuxScope::GetVariable(const char* varname, const AstNode* pnode, CVar* pva
 		throw exception_etc(*this, pnode, "GetVariable(): NULL varname").raise();
 	if (pvar)
 	{
+		if (is_reserved_class_member_name(varname))
+			throw exception_misuse(*this, pnode, string(".") + varname + " is reserved for internal class metadata.").raise();
 		if (pvar->strut.find(varname) != pvar->strut.end())
 			pout = &pvar->strut.at(varname);
 		else if (pvar->struts.find(varname) == pvar->struts.end())
@@ -1628,7 +1783,11 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 		// Expose current member values as local vars so class methods can read/write
 		// members without requiring an explicit receiver prefix.
 		for (auto& it : pBase->strut)
+		{
+			if (is_reserved_class_member_name(it.first))
+				continue;
 			son->SetVar(it.first.c_str(), &it.second);
+		}
 	}
 	if (!class_method && pBase && callingType==N_STRUCT) {
 		if (!pf || !pf->str) {
@@ -1829,7 +1988,8 @@ AstNode* AuxScope::ReadUDF(string& emsg, const string& udf_filename)
 			sprintf(buf, " in %s", fullpath.c_str());
 			emsg += buf;
 			auto fd = pEnv->udf.find(udf_filename);
-			pEnv->udf.erase(fd);
+			if (fd != pEnv->udf.end())
+				pEnv->udf.erase(fd);
 			return NULL; // error caught here
 		}
 	}
@@ -1948,6 +2108,12 @@ FILE* AuxScope::fopen_from_path(const string& fname, const string& ext, string& 
 AstNode* EngineRuntime::checkin_udf(const string& udfname, const string& fullpath, const string& filecontent, string& emsg)
 {
 	AstNode* pout = NULL;
+	if (first_code_line_starts_with_keyword(filecontent, "method") ||
+		first_code_line_starts_with_member_function(filecontent))
+	{
+		emsg = "Standalone UDF files cannot start with \"method\" or \"member function\". Use \"function\" for a UDF or place a \"method\" inside a class definition.";
+		return NULL;
+	}
 	AuxScope qscope(this);
 	qscope.script = udfname;
 	transform(qscope.script.begin(), qscope.script.end(), qscope.script.begin(), ::tolower);
@@ -2076,6 +2242,10 @@ AuxScope& AuxScope::SetVar(const char* name, CVar* prhs, CVar* pBase)
 	}
 	else
 	{
+		if (is_reserved_class_member_name(name))
+			return *this;
+		if (!class_has_declared_member(pEnv, pBase, name))
+			throw exception_misuse(*this, nullptr, string("Cannot add undeclared member .") + name + " to class object.").raise();
 		if (prhs->IsGO()) // name and prhs should be fed to struts
 		{
 			// Previous one should be cleared.

@@ -2,25 +2,24 @@
 
 ## Zero-argument calls
 
-AUX keeps its historical shorthand for zero-argument functions:
-
-```text
-getfs
-toc
-myudf
-```
-
-For compatibility with users coming from other languages, explicit empty parentheses are also
-accepted for zero-argument builtins and UDFs:
+Starting in AUX Engine 2.5.0, zero-argument function and class-constructor calls must use
+explicit empty parentheses:
 
 ```text
 getfs()
 toc()
 myudf()
+myclass()
 ```
 
-The two forms are equivalent only when the function has no arguments. Non-empty parentheses still
-go through the normal argument checker, so `getfs(1)` remains an error.
+Bare identifiers are variable lookups, not function calls:
+
+```text
+u = myclass()  // instantiate a class object
+v = myclass    // read an existing variable named myclass
+```
+
+Non-empty parentheses still go through the normal argument checker, so `getfs(1)` remains an error.
 
 ## Assignable selectors
 
