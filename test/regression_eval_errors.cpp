@@ -808,6 +808,184 @@ static bool case_class_without_constructor_requires_parentheses(std::string& err
   return true;
 }
 
+static bool case_class_method_not_shadowed_by_caller_local(std::string& err) {
+  Session s("case_class_method_not_shadowed_by_caller_local");
+  if (!s.ok()) { err = s.err; return false; }
+
+  if (!write_file(s.dir / "tagged.aux",
+                  "class tagged\n"
+                  "id=0\n"
+                  "\n"
+                  "method tagged(i)\n"
+                  "id=i\n"
+                  "\n"
+                  "method out=myfunc(arg)\n"
+                  "out=\"CLASS\"\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  // A UDF with a local subfunction whose name collides with the class method.
+  if (!write_file(s.dir / "caller.aux",
+                  "function out=caller(obj)\n"
+                  "out=obj.myfunc(0)\n"
+                  "\n"
+                  "function out=myfunc(o,a)\n"
+                  "out=\"LOCAL\"\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+
+  std::string preview;
+  if (aux_eval(&s.ctx, "u=tagged(1)", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "Class instantiation failed: " + preview;
+    return false;
+  }
+  // A receiver-qualified call must dispatch through the receiver's class, even when the
+  // calling UDF has a local subfunction of the same name.
+  if (aux_eval(&s.ctx, "out=caller(u)", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "Qualified method call inside a UDF failed: " + preview;
+    return false;
+  }
+  if (preview.find("CLASS") == std::string::npos) {
+    err = "Caller's local subfunction shadowed the class method, got: " + preview;
+    return false;
+  }
+
+  return true;
+}
+
+static bool case_member_function_text_in_string_literal_preserved(std::string& err) {
+  Session s("case_member_function_text_in_string_literal_preserved");
+  if (!s.ok()) { err = s.err; return false; }
+
+  // The "member function" rewrite must not edit text inside a string literal.
+  std::string preview;
+  if (aux_eval(&s.ctx, "a=\"member function\"", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "String literal assignment failed: " + preview;
+    return false;
+  }
+  if (preview.find("member function") == std::string::npos) {
+    err = "String literal was rewritten by the member-function preprocessor, got: " + preview;
+    return false;
+  }
+  if (aux_eval(&s.ctx, "b=\"say \"\"member function\"\" ok\"", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    err = "Escaped-quote string literal failed: " + preview;
+    return false;
+  }
+  if (preview.find("member function") == std::string::npos) {
+    err = "Escaped-quote string literal was rewritten, got: " + preview;
+    return false;
+  }
+
+  return true;
+}
+
+static bool case_class_method_parameter_colliding_with_member_is_rejected(std::string& err) {
+  Session s("case_class_method_parameter_colliding_with_member_is_rejected");
+  if (!s.ok()) { err = s.err; return false; }
+
+  // A formal parameter sharing a member name would shadow the member for the whole call,
+  // leaving it unreachable from the body. The class must fail to load.
+  if (!write_file(s.dir / "collide.aux",
+                  "class collide\n"
+                  "id=7\n"
+                  "\n"
+                  "method show(id)\n"
+                  "tmp=id\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  // The constructor is checked the same way as any other method.
+  if (!write_file(s.dir / "collidector.aux",
+                  "class collidector\n"
+                  "id=7\n"
+                  "\n"
+                  "method collidector(id)\n"
+                  "tmp=id\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+
+  std::string preview;
+  if (aux_eval(&s.ctx, "u=collide()", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR)) {
+    err = "Colliding method parameter should be rejected at class load, got: " + preview;
+    return false;
+  }
+  if (preview.find("collides with member") == std::string::npos) {
+    err = "Unexpected collision error: " + preview;
+    return false;
+  }
+  if (aux_eval(&s.ctx, "v=collidector()", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR)) {
+    err = "Colliding constructor parameter should be rejected, got: " + preview;
+    return false;
+  }
+  if (preview.find("collides with member") == std::string::npos) {
+    err = "Unexpected collision error for constructor: " + preview;
+    return false;
+  }
+
+  return true;
+}
+
+static bool case_class_member_writes_persist_from_method(std::string& err) {
+  Session s("case_class_member_writes_persist_from_method");
+  if (!s.ok()) { err = s.err; return false; }
+
+  if (!write_file(s.dir / "persist.aux",
+                  "class persist\n"
+                  "id=7\n"
+                  "v=[1 2 3]\n"
+                  "\n"
+                  // Plain member write.
+                  "method setto(n)\n"
+                  "id=n\n"
+                  "\n"
+                  // In-place member write must persist too.
+                  "method poke(n)\n"
+                  "v(2)=n\n"
+                  "\n"
+                  // A local that is not a declared member must not become one.
+                  "method scratch(n)\n"
+                  "tmp=n\n"
+                  "\n"
+                  "method out=readv()\n"
+                  "out=v\n",
+                  s.err)) {
+    err = s.err;
+    return false;
+  }
+  if (aux_add_udfpath(s.ctx, s.dir.string() + "/") != 0) {
+    err = "aux_add_udfpath failed for " + s.dir.string();
+    return false;
+  }
+
+  if (!expect_eval_ok(s, "u=persist()", "instantiate persist")) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "u.setto(42)", "plain member write")) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=u.id", "read member after plain write")) { err = s.err; return false; }
+  if (!expect_scalar_value(s, "x", 42.0)) { err = s.err; return false; }
+
+  if (!expect_eval_ok(s, "u.poke(99)", "in-place member write")) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "y=u.readv()", "read vector member")) { err = s.err; return false; }
+  if (!expect_vector_values(s, "y", {1.0, 99.0, 3.0})) { err = s.err; return false; }
+
+  if (!expect_eval_ok(s, "u.scratch(5)", "method-local scratch variable")) { err = s.err; return false; }
+  if (!expect_eval_error(s, "z=u.tmp", "method local must not become a member")) { err = s.err; return false; }
+
+  return true;
+}
+
 static bool case_standalone_method_udf_is_rejected(std::string& err) {
   Session s("case_standalone_method_udf_is_rejected");
   if (!s.ok()) { err = s.err; return false; }
@@ -921,6 +1099,10 @@ int main() {
   const TestCase tests[] = {
     {"case_class_internal_tag_hidden_from_preview_and_members", case_class_internal_tag_hidden_from_preview_and_members},
     {"case_class_without_constructor_requires_parentheses", case_class_without_constructor_requires_parentheses},
+    {"case_class_method_not_shadowed_by_caller_local", case_class_method_not_shadowed_by_caller_local},
+    {"case_member_function_text_in_string_literal_preserved", case_member_function_text_in_string_literal_preserved},
+    {"case_class_method_parameter_colliding_with_member_is_rejected", case_class_method_parameter_colliding_with_member_is_rejected},
+    {"case_class_member_writes_persist_from_method", case_class_member_writes_persist_from_method},
     {"case_standalone_method_udf_is_rejected", case_standalone_method_udf_is_rejected},
     {"case_standalone_member_function_udf_is_rejected", case_standalone_member_function_udf_is_rejected},
     {"case_class_member_function_definition_is_rejected", case_class_member_function_definition_is_rejected},

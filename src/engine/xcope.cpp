@@ -272,16 +272,23 @@ static std::string preprocess_member_function_syntax(const std::string& src, std
 	{
 		size_t line_end = out.find('\n', pos);
 		if (line_end == std::string::npos) line_end = out.size();
-		size_t scan_end = line_end;
-		size_t comment = out.find("//", pos);
-		if (comment != std::string::npos && comment < line_end)
-			scan_end = comment;
-
-		for (size_t i = pos; i < scan_end; ++i)
+		// Rewrite only real code: never touch text inside a string literal or a comment.
+		// The lexer escapes an embedded quote by doubling it (""), so a plain toggle tracks it.
+		bool in_string = false;
+		for (size_t i = pos; i < line_end; ++i)
 		{
-			if (!starts_with_keyword(out, i, scan_end, "member")) continue;
-			size_t j = skip_spaces(out, i + 6, scan_end);
-			if (!starts_with_keyword(out, j, scan_end, "function")) continue;
+			if (out[i] == '"')
+			{
+				in_string = !in_string;
+				continue;
+			}
+			if (in_string)
+				continue;
+			if (out[i] == '/' && i + 1 < line_end && out[i + 1] == '/')
+				break; // rest of the line is a comment
+			if (!starts_with_keyword(out, i, line_end, "member")) continue;
+			size_t j = skip_spaces(out, i + 6, line_end);
+			if (!starts_with_keyword(out, j, line_end, "function")) continue;
 			for (size_t k = i; k < i + 6; ++k) out[k] = ' ';
 			member_function_lines.insert(line);
 			i = j + 7;
@@ -1149,6 +1156,20 @@ static bool ensure_class_loaded(AuxScope& ths, const std::string& class_name_low
 			emsg = "Method \"" + m.first + "\" did not parse to a function node.";
 			return false;
 		}
+		// A formal parameter that shares a member name would shadow that member for the whole
+		// call, leaving it unreachable from the body. Reject the collision here rather than
+		// letting the ambiguity surface as a silently dropped or silently overwritten member.
+		for (AstNode* pf = fn->child ? fn->child->child : nullptr; pf; pf = pf->next)
+		{
+			if (!pf->str) continue;
+			if (cls.defaults.find(pf->str) != cls.defaults.end())
+			{
+				emsg = "Method \"" + m.first + "\" parameter \"" + pf->str +
+					"\" collides with member \"" + pf->str + "\" in class \"" + class_name_lower +
+					"\". Rename the parameter.";
+				return false;
+			}
+		}
 		std::string udf_key = "__class__" + class_name_lower + "__" + m.first;
 		if (fn->str) free(fn->str);
 		fn->str = (char*)calloc(udf_key.size() + 1, 1);
@@ -1669,7 +1690,9 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 			}
 		}
 	}
-	if (!baseLookup.empty()) {
+	// A receiver-qualified call (obj.method()) is resolved by the receiver's class above.
+	// The caller's local subfunctions must not override it; they only apply to unqualified calls.
+	if (!resolved && !baseLookup.empty()) {
 		auto udftreeBase = pEnv->udf.find(baseLookup);
 		if (udftreeBase != pEnv->udf.end()) {
 			auto itLocal = udftreeBase->second.local.find(lookupName);
@@ -1824,6 +1847,8 @@ void AuxScope::PrepareAndCallUDF(const AstNode* pCalling, CVar* pBase, CVar* pSt
 	if (class_method && pBase)
 	{
 		// Copy back values for existing members that were updated in class method scope.
+		// A formal parameter can never share a member name (rejected at class load), so every
+		// member-named local in this scope is the member itself.
 		for (auto& it : pBase->strut)
 		{
 			auto vt = son->Vars.find(it.first);
