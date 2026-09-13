@@ -284,6 +284,17 @@ if(AUXE_BUILD_TESTS)
     COMMAND auxe_regression_eval_errors
   )
 
+  add_executable(auxe_regression_wav_header
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_wav_header.cpp
+  )
+  target_link_libraries(auxe_regression_wav_header PRIVATE auxe)
+  target_include_directories(auxe_regression_wav_header PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  add_test(
+    NAME auxe_regression_wav_header
+    COMMAND auxe_regression_wav_header
+  )
+
   add_library(auxe_test_native_module SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/test/native_module_fixture.cpp
   )

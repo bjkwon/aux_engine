@@ -54,6 +54,23 @@ static uint64_t tell_pos(FILE* f)
 #endif
 }
 
+static uint64_t file_size_of(FILE* f)
+{
+    uint64_t here = tell_pos(f);
+#if defined(_WIN32)
+    if (_fseeki64(f, 0, SEEK_END) != 0) return 0;
+#else
+    if (fseeko(f, 0, SEEK_END) != 0) return 0;
+#endif
+    uint64_t size = tell_pos(f);
+#if defined(_WIN32)
+    _fseeki64(f, (int64_t)here, SEEK_SET);
+#else
+    fseeko(f, (off_t)here, SEEK_SET);
+#endif
+    return size;
+}
+
 static int is_pcm_guid(const uint8_t g[16])
 {
     // {00000001-0000-0010-8000-00AA00389B71}
@@ -168,8 +185,9 @@ int wav_read_header(const std::string& fname, WavInfo& out, std::string& estr)
     int found_fmt = 0;
     int found_data = 0;
     // Scan chunks until we find fmt and data (or EOF).
-    int expected_end;
-    int actual_end;
+    uint64_t expected_end = 0;
+    uint64_t actual_end = 0;
+    const uint64_t file_size = file_size_of(fp);
     while (!found_data) {
         char chunk_id[4];
         uint32_t chunk_size;
@@ -185,12 +203,16 @@ int wav_read_header(const std::string& fname, WavInfo& out, std::string& estr)
             }
             found_fmt = 1;
         } else if (memcmp(chunk_id, "data", 4) == 0) {
-            headersize = actual_end;
-            out.data_offset = tell_pos(fp);
-            out.data_size = chunk_size;
+            out.data_offset = chunk_data_pos;
+            headersize = (int)(chunk_data_pos - 8); // where the data chunk id begins
+            // A corrupt, truncated or still-being-written file can declare far more
+            // data than it actually holds. Trust the file size, not the header;
+            // otherwise the caller allocates a buffer for data that isn't there.
+            uint64_t avail = file_size > chunk_data_pos ? file_size - chunk_data_pos : 0;
+            out.data_size = (uint32_t)(chunk_size < avail ? chunk_size : avail);
             // Skip audio data for scanning; caller may not want this, but
             // we stop after finding data anyway.
-            if (!skip_bytes(fp, chunk_size)) return 0;
+            if (!skip_bytes(fp, out.data_size)) return 0;
             found_data = 1;
         } else {
             // Skip unknown chunk payload
@@ -215,6 +237,12 @@ int wav_read_header(const std::string& fname, WavInfo& out, std::string& estr)
         estr = fname + "--Error: Cannot close file.";
         return 0;
     }
+    // Without a usable fmt chunk every downstream size computation is garbage.
+    if (!found_fmt || out.block_align == 0 || out.num_channels == 0 ||
+        out.bits_per_sample == 0 || out.sample_rate == 0) {
+        estr = fname + "--Error: Missing or invalid fmt chunk.";
+        return 0;
+    }
     return headersize + 8; // adding 8 to the position where the data chunk is found
 }
 
@@ -231,7 +259,7 @@ uint64_t wav_read_float32(FILE* fp, uint64_t frames2read, const WavInfo& info, s
     }
     out.resize(frames2read*info.num_channels);
     uint64_t id=0;
-    size_t res;
+    size_t res = 0; // must be initialized: callers size buffers with the return value
     switch (info.audio_format) {
         case 1:
             if (info.bits_per_sample == 8) {
@@ -243,7 +271,9 @@ uint64_t wav_read_float32(FILE* fp, uint64_t frames2read, const WavInfo& info, s
                 std::vector<int16_t> temp_out(frames2read* info.num_channels, 0);
                 res = fread(temp_out.data(), info.block_align, frames2read, fp);
                 for (auto &v : out) v = (float)temp_out[id++] / 32768;
-            } else if (info.bits_per_sample == 24) { 
+            } else if (info.bits_per_sample == 24) {
+                estr = "24-bit PCM wav files are not supported yet.";
+                return 0;
             } else {
                 estr = "Unknown PCM 1.";
                 return 0;                
@@ -265,7 +295,12 @@ uint64_t wav_read_float32(FILE* fp, uint64_t frames2read, const WavInfo& info, s
             // this part was not tested
             res = fread(out.data(), info.block_align, frames2read, fp);
         break;
+        default:
+            estr = "Unsupported wav audio format.";
+            return 0;
     }
+    if (res < frames2read)
+        out.resize(res * info.num_channels); // short read; don't hand back uninitialized frames
     return res;
 }
 

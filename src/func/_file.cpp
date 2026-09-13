@@ -989,22 +989,36 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	size_t count;
 	past->Sig.Reset(wavinfo.sample_rate);
 	past->Sig.bufType = 'R';
+	size_t frames = wavinfo.data_size / wavinfo.block_align; // block_align is validated in wav_read_header
 	size_t id1 = (size_t)(beginMs / 1000.f * wavinfo.sample_rate + .5);
-	FILE* fp = fopen(sourceName.c_str(), "rb"); // most likely success
+	if (id1 > frames)
+		id1 = frames;
+	FILE* fp = fopen(sourceName.c_str(), "rb");
+	if (!fp)
+		throw exception_etc(*past, pnode, "File cannot be opened: " + sourceName).raise();
 	res = fseek(fp, res + id1 * wavinfo.block_align, SEEK_SET);
-	int _frames2read;
-	size_t frames = wavinfo.data_size / wavinfo.block_align;
+	// Keep this signed and 64-bit: a truncated int here used to turn a bogus
+	// request into a gigantic buffer allocation.
+	int64_t _frames2read;
 	if (durMs < 0)
-		_frames2read = frames - id1;
+		_frames2read = (int64_t)(frames - id1);
 	else
-		_frames2read = (size_t)(durMs / 1000.f * wavinfo.sample_rate + .5) - id1;
-	size_t frames2read = max(_frames2read, 0);
+		_frames2read = (int64_t)(durMs / 1000.f * wavinfo.sample_rate + .5) - (int64_t)id1;
+	if (_frames2read < 0)
+		_frames2read = 0;
+	// Never read (or allocate) beyond what the file actually holds.
+	if ((uint64_t)_frames2read > frames - id1)
+		_frames2read = (int64_t)(frames - id1);
+	size_t frames2read = (size_t)_frames2read;
 	if (wavinfo.num_channels == 1)
 	{
-		past->Sig.UpdateBuffer((uint64_t)frames2read);
 		vector<float> buffer;
 		count = wav_read_float32(fp, frames2read, wavinfo, buffer, estr);
-		//what if count is less than expected?
+		if (!estr.empty()) {
+			fclose(fp);
+			throw exception_etc(*past, pnode, estr).raise();
+		}
+		past->Sig.UpdateBuffer((uint64_t)count);
 		uint64_t id = 0;
 		for (auto v : buffer) {
 			past->Sig.buf[id++] = v;
@@ -1014,12 +1028,15 @@ void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	{
 		vector<float> buffer;
 		count = wav_read_float32(fp, frames2read, wavinfo, buffer, estr);
-		//what if count is less than expected?
+		if (!estr.empty()) {
+			fclose(fp);
+			throw exception_etc(*past, pnode, estr).raise();
+		}
 		auto frames = reinterpret_cast<const float(*)[2]>(buffer.data());
 		size_t framesRead = count;
 		past->Sig.next = new CSignals((int)wavinfo.sample_rate);
-		past->Sig.UpdateBuffer((int)framesRead);
-		past->Sig.next->UpdateBuffer((int)framesRead);
+		past->Sig.UpdateBuffer((uint64_t)framesRead);
+		past->Sig.next->UpdateBuffer((uint64_t)framesRead);
 		for (size_t k = 0; k < framesRead; ++k) {
 			past->Sig.buf[k] = frames[k][0];
 			past->Sig.next->buf[k] = frames[k][1];

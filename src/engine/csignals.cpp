@@ -28,6 +28,10 @@
 
 #define CRIT  100. // Threshold for computing rms is above 100th of its max
 
+// Sanity cap for a single signal buffer. Anything beyond this is a bogus length
+// (e.g., a corrupt wav header) rather than a signal a user meant to create.
+#define MAX_BUFFER_BYTES ((uint64_t)4 * 1024 * 1024 * 1024)
+
 #define RETURN_0_MSG(str) {	strcpy(errstr, str);		return 0;	}
 
 void filter(int nTabs, double *num, double *den, int length, double *in, double *out);
@@ -378,21 +382,29 @@ body& body::UpdateBuffer(uint64_t length, uint64_t offset)	// Set nSamples. Re-a
 {
 	if (!ghost)
 	{
-		unsigned int currentBufsize = bufBlockSize * nSamples;
-		unsigned int reqBufSize = bufBlockSize * length;
-		if (length < 0 || currentBufsize == reqBufSize)
+		// These must be 64-bit: truncating them to unsigned int used to under-allocate
+		// the buffer while the memset below still cleared the full 64-bit size,
+		// scribbling past the end of the allocation (segfault).
+		const uint64_t currentBufsize = (uint64_t)bufBlockSize * nSamples;
+		const uint64_t reqBufSize = (uint64_t)bufBlockSize * length;
+		if (currentBufsize == reqBufSize)
 			return *this;
+		// offset shifts the existing content to the right; it must fit in the new length.
+		if (offset > length || nSamples + offset > length)
+			throw std::length_error("UpdateBuffer: offset does not fit in the requested length.");
+		if (reqBufSize > MAX_BUFFER_BYTES)
+			throw std::length_error("Requested signal size is too large (corrupt input or bad length?).");
 		if (length > nSamples) {
 			bool *newlogbuf = new bool[reqBufSize];
 			if (nSamples > 0)
 				memcpy(newlogbuf + offset * bufBlockSize, buf, nSamples*bufBlockSize);
 			delete[] buf;
 			logbuf = newlogbuf;
+			//initializing with zeros for the rest
+			const uint64_t filled = (nSamples + offset) * (uint64_t)bufBlockSize;
+			memset(logbuf + filled, 0, reqBufSize - filled);
 		}
-		//initializing with zeros for the rest
-		if (length > nSamples)
-			memset(logbuf + (nSamples + offset) * bufBlockSize, 0, (length - nSamples - offset)*bufBlockSize);
-		memset(logbuf, 0, offset * bufBlockSize);
+		memset(logbuf, 0, offset * (uint64_t)bufBlockSize);
 	}
 	//For ghost, the rationale for this call is unclear; but just update nSamples with length
 	nSamples = length;
