@@ -408,6 +408,247 @@ bool case_float64_mono(std::string& err) {
   return load_float_wav("float64_mono", 1, 64, false, 64, err);
 }
 
+// ---------------------------------------------------------------------------
+// Writer: wavwrite(x, file, option) for 8/16/24/32-bit int and float32.
+
+std::vector<uint8_t> read_bytes(const fs::path& p, std::string& err) {
+  std::vector<uint8_t> bytes;
+  FILE* fp = fopen(p.string().c_str(), "rb");
+  if (!fp) {
+    err = "Cannot read " + p.string();
+    return bytes;
+  }
+  uint8_t chunk[4096];
+  size_t n;
+  while ((n = fread(chunk, 1, sizeof(chunk), fp)) > 0) bytes.insert(bytes.end(), chunk, chunk + n);
+  fclose(fp);
+  return bytes;
+}
+
+uint16_t get_u16(const std::vector<uint8_t>& b, size_t off) {
+  return (uint16_t)(b[off] | ((uint16_t)b[off + 1] << 8));
+}
+
+uint32_t get_u32(const std::vector<uint8_t>& b, size_t off) {
+  return (uint32_t)(b[off] | ((uint32_t)b[off + 1] << 8) | ((uint32_t)b[off + 2] << 16) |
+                    ((uint32_t)b[off + 3] << 24));
+}
+
+// Write a ramp through wavwrite with the given option, then read it back with
+// file() and compare. tolerance is the worst-case quantization error of the
+// format under test.
+bool roundtrip(const char* dirname, const char* option, uint16_t expect_format,
+               uint16_t expect_bits, double tolerance, bool stereo, std::string& err) {
+  Session s(dirname);
+  if (!s.ok()) { err = s.err; return false; }
+  const fs::path wav = s.dir / "out.wav";
+  const int frames = 64;
+
+  // A ramp from -1 to just under +1, as an audio object at the environment fs.
+  // The right channel is its negation, so a channel swap would fail the check.
+  std::string preview;
+  const std::string ramp =
+      "(0:" + std::to_string(frames - 1) + ")/" + std::to_string(frames) + "*2-1";
+  const std::string mk = stereo ? "v=" + ramp + ", x=[audio(v); audio(-v)]"
+                                : "v=" + ramp + ", x=audio(v)";
+  if (aux_eval(&s.ctx, mk, s.cfg, preview) != (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = "Could not build the test signal: " + preview;
+    return false;
+  }
+  const std::string cmd =
+      "wavwrite(x, \"" + wav.string() + "\", \"" + option + "\")";
+  if (aux_eval(&s.ctx, cmd, s.cfg, preview) != (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = std::string("wavwrite with option \"") + option + "\" failed: " + preview;
+    return false;
+  }
+
+  std::vector<uint8_t> bytes = read_bytes(wav, err);
+  if (bytes.size() < 44) { if (err.empty()) err = "Output file is too short."; return false; }
+  const uint16_t channels = stereo ? 2 : 1;
+  const uint16_t block_align = (uint16_t)(channels * expect_bits / 8);
+  // PCM gets the canonical 44-byte header; non-PCM carries cbSize and a fact
+  // chunk, which moves the data chunk 14 bytes later.
+  const bool pcm = expect_format == 1;
+  const size_t header_size = pcm ? 44 : 58;
+  const size_t data_off = header_size - 8;
+  if (bytes.size() < header_size) { err = "Output file is too short."; return false; }
+  if (get_u32(bytes, 16) != (pcm ? 16u : 18u)) {
+    err = "fmt chunk size: got " + std::to_string(get_u32(bytes, 16));
+    return false;
+  }
+  if (!pcm) {
+    if (memcmp(&bytes[38], "fact", 4) != 0) {
+      err = "Non-PCM output is missing its fact chunk.";
+      return false;
+    }
+    if (get_u32(bytes, 42) != 4 || get_u32(bytes, 46) != (uint32_t)frames) {
+      err = "fact chunk should hold " + std::to_string(frames) + " frames, got " +
+            std::to_string(get_u32(bytes, 46));
+      return false;
+    }
+  }
+  if (memcmp(&bytes[data_off], "data", 4) != 0) {
+    err = "data chunk not at the expected offset " + std::to_string(data_off);
+    return false;
+  }
+  if (get_u16(bytes, 20) != expect_format) {
+    err = "audio_format: expected " + std::to_string(expect_format) + ", got " +
+          std::to_string(get_u16(bytes, 20));
+    return false;
+  }
+  if (get_u16(bytes, 34) != expect_bits) {
+    err = "bits_per_sample: expected " + std::to_string(expect_bits) + ", got " +
+          std::to_string(get_u16(bytes, 34));
+    return false;
+  }
+  if (get_u16(bytes, 32) != block_align) {
+    err = "block_align: expected " + std::to_string(block_align) + ", got " +
+          std::to_string(get_u16(bytes, 32));
+    return false;
+  }
+  // The stereo header bug: data size must match the bytes actually present.
+  const uint32_t expect_data = (uint32_t)frames * block_align;
+  if (get_u32(bytes, data_off + 4) != expect_data) {
+    err = "data chunk size: expected " + std::to_string(expect_data) + ", got " +
+          std::to_string(get_u32(bytes, data_off + 4));
+    return false;
+  }
+  if (bytes.size() != header_size + expect_data) {
+    err = "File size: expected " + std::to_string(header_size + expect_data) + ", got " +
+          std::to_string(bytes.size());
+    return false;
+  }
+  if (get_u32(bytes, 4) != (uint32_t)(bytes.size() - 8)) {
+    err = "RIFF size: expected " + std::to_string(bytes.size() - 8) + ", got " +
+          std::to_string(get_u32(bytes, 4));
+    return false;
+  }
+
+  if (aux_eval(&s.ctx, "y=file(\"" + wav.string() + "\")", s.cfg, preview) !=
+      (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = "Reading back the written file failed: " + preview;
+    return false;
+  }
+  AuxObj obj = aux_get_var(s.ctx, "y");
+  if (!obj) { err = "y not found."; return false; }
+  if (aux_num_channels(obj) != (int)channels) {
+    err = "Expected " + std::to_string(channels) + " channels, got " +
+          std::to_string(aux_num_channels(obj));
+    return false;
+  }
+  for (int c = 0; c < (int)channels; ++c) {
+    std::vector<auxtype> got(frames, 0);
+    const size_t n = aux_flatten_channel(obj, c, got.data(), got.size());
+    if (n != (size_t)frames) {
+      err = "Channel " + std::to_string(c) + ": expected " + std::to_string(frames) +
+            " samples, got " + std::to_string(n);
+      return false;
+    }
+    for (int k = 0; k < frames; ++k) {
+      double expected = (double)k / frames * 2 - 1;
+      if (c == 1) expected = -expected;
+      if (std::abs((double)got[k] - expected) > tolerance) {
+        err = std::string("Option \"") + option + "\", channel " + std::to_string(c) +
+              ", sample " + std::to_string(k) + ": expected " + std::to_string(expected) +
+              ", got " + std::to_string((double)got[k]);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool case_write_default_is_int16(std::string& err) {
+  return roundtrip("write_default", "", 1, 16, 1.0 / 32768, false, err);
+}
+bool case_write_int8(std::string& err) {
+  return roundtrip("write_int8", "8", 1, 8, 1.0 / 128, false, err);
+}
+bool case_write_int16(std::string& err) {
+  return roundtrip("write_int16", "int16", 1, 16, 1.0 / 32768, false, err);
+}
+bool case_write_int24(std::string& err) {
+  return roundtrip("write_int24", "24", 1, 24, 1.0 / 8388608, false, err);
+}
+bool case_write_int32(std::string& err) {
+  // float32 is the engine's read-back container, so 32-bit int round trips only
+  // to float32 precision.
+  return roundtrip("write_int32", "int32", 1, 32, 1e-6, false, err);
+}
+bool case_write_float32(std::string& err) {
+  return roundtrip("write_float32", "float", 3, 32, 1e-6, false, err);
+}
+bool case_write_stereo_int24(std::string& err) {
+  return roundtrip("write_stereo24", "24", 1, 24, 1.0 / 8388608, true, err);
+}
+bool case_write_option_is_case_insensitive(std::string& err) {
+  return roundtrip("write_case", "Float32", 3, 32, 1e-6, false, err);
+}
+
+// Samples beyond full scale must clamp, not wrap around to the opposite sign.
+bool case_write_clips_instead_of_wrapping(std::string& err) {
+  Session s("write_clip");
+  if (!s.ok()) { err = s.err; return false; }
+  const fs::path wav = s.dir / "clip.wav";
+  std::string preview;
+  const std::string mk = "x=audio([1.5 -1.5 0.5])";
+  if (aux_eval(&s.ctx, mk, s.cfg, preview) != (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = "Could not build the test signal: " + preview;
+    return false;
+  }
+  if (aux_eval(&s.ctx, "wavwrite(x, \"" + wav.string() + "\", \"16\")", s.cfg, preview) !=
+      (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = "wavwrite failed: " + preview;
+    return false;
+  }
+  std::vector<uint8_t> bytes = read_bytes(wav, err);
+  if (bytes.size() != 44 + 6) {
+    if (err.empty()) err = "Unexpected file size " + std::to_string(bytes.size());
+    return false;
+  }
+  const int16_t s0 = (int16_t)get_u16(bytes, 44);
+  const int16_t s1 = (int16_t)get_u16(bytes, 46);
+  if (s0 != 32767) {
+    err = "+1.5 should clamp to 32767, got " + std::to_string(s0);
+    return false;
+  }
+  if (s1 != -32768) {
+    err = "-1.5 should clamp to -32768, got " + std::to_string(s1);
+    return false;
+  }
+  return true;
+}
+
+// A typo in the option must be an error, not a silent fallback to 16-bit.
+bool case_write_rejects_unknown_option(std::string& err) {
+  Session s("write_bad_option");
+  if (!s.ok()) { err = s.err; return false; }
+  const fs::path wav = s.dir / "bad.wav";
+  std::string preview;
+  const std::string mk = "x=audio((0:63)/64)";
+  if (aux_eval(&s.ctx, mk, s.cfg, preview) != (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = "Could not build the test signal: " + preview;
+    return false;
+  }
+  const int rc =
+      aux_eval(&s.ctx, "wavwrite(x, \"" + wav.string() + "\", \"20\")", s.cfg, preview);
+  if (rc == (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = "An unknown format option was accepted.";
+    return false;
+  }
+  if (preview.empty()) {
+    err = "Failed without an error message.";
+    return false;
+  }
+  // Two formats in one option string is a typo, not "last one wins".
+  if (aux_eval(&s.ctx, "wavwrite(x, \"" + wav.string() + "\", \"float 16\")", s.cfg, preview) ==
+      (int)auxEvalStatus::AUX_EVAL_OK) {
+    err = "Conflicting format options were accepted.";
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 int main() {
@@ -424,6 +665,16 @@ int main() {
       {"case_float32_mono", case_float32_mono},
       {"case_float32_stereo_extensible", case_float32_stereo_extensible},
       {"case_float64_mono", case_float64_mono},
+      {"case_write_default_is_int16", case_write_default_is_int16},
+      {"case_write_int8", case_write_int8},
+      {"case_write_int16", case_write_int16},
+      {"case_write_int24", case_write_int24},
+      {"case_write_int32", case_write_int32},
+      {"case_write_float32", case_write_float32},
+      {"case_write_stereo_int24", case_write_stereo_int24},
+      {"case_write_option_is_case_insensitive", case_write_option_is_case_insensitive},
+      {"case_write_clips_instead_of_wrapping", case_write_clips_instead_of_wrapping},
+      {"case_write_rejects_unknown_option", case_write_rejects_unknown_option},
   };
 
   bool ok = true;

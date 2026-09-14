@@ -879,63 +879,96 @@ static void write2textfile(FILE* fid, CVar* psig)
 	}
 }
 
+// The option string is a whitespace/comma-separated token list so that later
+// options can be added without another positional argument. Today the only
+// tokens are sample formats; an empty option means int16, the historical format.
+static WavSampleFormat parse_wavwrite_option(AuxScope* past, const AstNode* pnode, const string& option)
+{
+	vector<string> tokens;
+	str2vector(tokens, option, " \t,");
+	WavSampleFormat fmt = WAVFMT_INT16;
+	bool format_given = false;
+	for (auto& token : tokens)
+	{
+		WavSampleFormat t = wav_format_from_token(token);
+		if (t == WAVFMT_UNKNOWN)
+		{
+			string estr = string("Unknown wavwrite option \"") + token + "\"; expected one of " + wav_format_tokens();
+			throw exception_func(*past, pnode, estr.c_str()).raise();
+		}
+		if (format_given)
+		{
+			string estr = string("wavwrite: conflicting sample formats in \"") + option + "\"";
+			throw exception_func(*past, pnode, estr.c_str()).raise();
+		}
+		fmt = t;
+		format_given = true;
+	}
+	return fmt;
+}
+
 void _wavwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	string filename = args[0].str();
 	string option = args[1].str();
 
+	WavSampleFormat fmt = parse_wavwrite_option(past, pnode, option);
 	string fullfilename = past->makefullfile(filename, ".wav");
 	past->Sig.MakeChainless();
 
-	// As of 12/27/2025, write only in PCM16sle format
 	WavInfo wavinfo = { 0 };
-	wavinfo.audio_format = 1; // PCM only for now
+	wavinfo.audio_format = wav_format_code(fmt);
 	wavinfo.num_channels = (past->Sig.next) ? 2 : 1;
 	wavinfo.sample_rate = past->Sig.GetFs();
-	wavinfo.bits_per_sample = 2 * 8; // 16 bit for now
-	wavinfo.block_align = 2 * wavinfo.num_channels; // 16 bits (2 bytes) per channel for now
+	wavinfo.bits_per_sample = wav_format_bits(fmt);
+	wavinfo.block_align = wavinfo.bits_per_sample / 8 * wavinfo.num_channels;
 	wavinfo.byte_rate = wavinfo.sample_rate * wavinfo.block_align;
-	wavinfo.data_offset = 44; // ok for PCM16sle
-	wavinfo.data_size = past->Sig.nSamples * wavinfo.block_align;
-	wavinfo.riff_size = wavinfo.data_size + 44 - 8; // WAVE header size is 44
+	wavinfo.data_size = (uint32_t)(past->Sig.nSamples * wavinfo.block_align);
 	FILE* fp;
 	string estr;
 	if ((fp = fopen(fullfilename.c_str(), "wb")) == NULL) {
 		estr = string("Unable to open/write audio file:") + fullfilename;
 		throw exception_etc(*past, pnode, estr.c_str()).raise();
 	}
-	char buffer[44];
-	make_wav_header(buffer, wavinfo, past->Sig.nSamples);
-	int res = fwrite(buffer, 1, 44, fp);
-	if (res != 44) {
+	// make_wav_header decides the header size: non-PCM formats need a fact chunk.
+	char buffer[WAV_HEADER_MAX_BYTES];
+	size_t headersize = make_wav_header(buffer, wavinfo, past->Sig.nSamples);
+	wavinfo.data_offset = headersize;
+	wavinfo.riff_size = (uint32_t)(wavinfo.data_size + headersize - 8);
+	size_t res = fwrite(buffer, 1, headersize, fp);
+	if (res != headersize) {
+		fclose(fp);
 		estr = string("Error in fwrite (header): ") + fullfilename;
 		throw exception_etc(*past, pnode, estr.c_str()).raise();
 	}
-	uint64_t k;
-	uint16_t val, val2(0);
-	bool complete = false;
-	if (past->Sig.next) {
-		for (k = 0; k < past->Sig.nSamples; k++) {
-			val = (int16_t)(past->Sig.buf[k] * 32768);
-			val2 = (int16_t)(past->Sig.next->buf[k] * 32768);
-			if (fwrite(&val, 1, 2, fp) != 2) break;
-			if (fwrite(&val2, 1, 2, fp) != 2) break;
-			complete = k == past->Sig.nSamples-1;
+	// Interleave and encode in blocks instead of one fwrite per sample.
+	const uint64_t framesPerBlock = 4096;
+	vector<double> block(framesPerBlock * wavinfo.num_channels);
+	bool complete = true;
+	for (uint64_t done = 0; done < past->Sig.nSamples; done += framesPerBlock) {
+		uint64_t frames = min(framesPerBlock, past->Sig.nSamples - done);
+		size_t count = 0;
+		if (past->Sig.next) {
+			for (uint64_t k = 0; k < frames; k++) {
+				block[count++] = (double)past->Sig.buf[done + k];
+				block[count++] = (double)past->Sig.next->buf[done + k];
+			}
+		}
+		else {
+			for (uint64_t k = 0; k < frames; k++)
+				block[count++] = (double)past->Sig.buf[done + k];
+		}
+		if (wav_write_samples(fp, fmt, block.data(), count) != count) {
+			complete = false;
+			break;
 		}
 	}
-	else {
-		for (uint64_t k = 0; k < past->Sig.nSamples; k++) {
-			val = (int16_t)(past->Sig.buf[k] * 32768);
-			if (fwrite(&val, 1, 2, fp) != 2) break;
-			complete = k == past->Sig.nSamples-1;
-		}
-	}
-	res = fclose(fp);
+	int closed = fclose(fp);
 	if (!complete) {
 		estr = string("Error in fwrite: ") + fullfilename;
 		throw exception_etc(*past, pnode, estr.c_str()).raise();
 	}
-	if (res) {
+	if (closed) {
 		estr = string("Error in fclose: ") + fullfilename;
 		throw exception_etc(*past, pnode, estr.c_str()).raise();
 	}

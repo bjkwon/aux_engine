@@ -4,6 +4,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
+#include <math.h>
 #include <inttypes.h>
 #include <vector>
 #include "_file_wav.h"
@@ -358,35 +360,163 @@ uint64_t wav_read_float32(FILE* fp, uint64_t frames2read, const WavInfo& info, s
     return res;
 }
 
-void make_wav_header(char* buffer, const WavInfo& info, size_t nSamples)
+// Little-endian field writers. memcpy rather than a cast through the buffer:
+// the fact chunk pushes later fields off their natural alignment.
+static inline void put_id(char* buffer, size_t off, const char* id)
 {
-    buffer[0] = 'R';
-    buffer[1] = 'I';
-    buffer[2] = 'F';
-    buffer[3] = 'F';
-    // from 4 to 7: riff size (file_size_minus_8)
-    *(uint32_t*)(buffer + 4) = info.riff_size;
-    buffer[8] = 'W';
-    buffer[9] = 'A';
-    buffer[10] = 'V';
-    buffer[11] = 'E';
-    buffer[12] = 'f';
-    buffer[13] = 'm';
-    buffer[14] = 't';
-    buffer[15] = ' ';
-    // from 16 to 19: fmt_chunk_size (16 in most cases)
-    *(uint32_t*)(buffer + 16) = 16;
-    *(uint16_t*)(buffer + 20) = info.audio_format;
-    *(uint16_t*)(buffer + 22) = info.num_channels;
-    *(uint32_t*)(buffer + 24) = info.sample_rate;
-    *(uint32_t*)(buffer + 28) = info.byte_rate;
-    *(uint16_t*)(buffer + 32) = info.block_align;
-    *(uint16_t*)(buffer + 34) = info.bits_per_sample;
-    buffer[36] = 'd';
-    buffer[37] = 'a';
-    buffer[38] = 't';
-    buffer[39] = 'a';
-    *(uint32_t*)(buffer + 40) = nSamples * info.block_align * info.num_channels;
+    memcpy(buffer + off, id, 4);
+}
+
+static inline void put_u16(char* buffer, size_t off, uint16_t v)
+{
+    uint8_t b[2] = { (uint8_t)(v & 0xFF), (uint8_t)(v >> 8) };
+    memcpy(buffer + off, b, 2);
+}
+
+static inline void put_u32(char* buffer, size_t off, uint32_t v)
+{
+    uint8_t b[4];
+    for (int k = 0; k < 4; k++) b[k] = (uint8_t)((v >> (8 * k)) & 0xFF);
+    memcpy(buffer + off, b, 4);
+}
+
+// Writes the header into buffer (at least WAV_HEADER_MAX_BYTES) and returns its
+// size, which depends on the format: canonical 44 bytes for PCM, and for
+// non-PCM the WAVEFORMATEX cbSize field plus the fact chunk the spec calls for.
+size_t make_wav_header(char* buffer, const WavInfo& info, size_t nSamples)
+{
+    const bool pcm = info.audio_format == 1;
+    const uint32_t fmt_size = pcm ? 16u : 18u;
+    // block_align already covers every channel of one frame; don't multiply by
+    // num_channels again or stereo files claim twice the data they hold.
+    const uint32_t data_size = (uint32_t)(nSamples * info.block_align);
+    const size_t header_size = pcm ? 44 : 58;
+
+    put_id(buffer, 0, "RIFF");
+    put_u32(buffer, 4, (uint32_t)(header_size - 8 + data_size)); // file_size_minus_8
+    put_id(buffer, 8, "WAVE");
+    put_id(buffer, 12, "fmt ");
+    put_u32(buffer, 16, fmt_size);
+    put_u16(buffer, 20, info.audio_format);
+    put_u16(buffer, 22, info.num_channels);
+    put_u32(buffer, 24, info.sample_rate);
+    put_u32(buffer, 28, info.byte_rate);
+    put_u16(buffer, 32, info.block_align);
+    put_u16(buffer, 34, info.bits_per_sample);
+    size_t off = 36;
+    if (!pcm) {
+        put_u16(buffer, off, 0); // cbSize: no extra fmt bytes follow
+        off += 2;
+        // fact holds the sample count per channel. Readers of non-PCM data use
+        // it instead of deriving a frame count from the data size.
+        put_id(buffer, off, "fact");
+        put_u32(buffer, off + 4, 4);
+        put_u32(buffer, off + 8, (uint32_t)nSamples);
+        off += 12;
+    }
+    put_id(buffer, off, "data");
+    put_u32(buffer, off + 4, data_size);
+    return off + 8;
+}
+
+WavSampleFormat wav_format_from_token(const std::string& token)
+{
+    std::string t;
+    for (char c : token) t += (char)tolower((unsigned char)c);
+    if (t == "8" || t == "int8" || t == "uint8") return WAVFMT_INT8;
+    if (t == "16" || t == "int16") return WAVFMT_INT16;
+    if (t == "24" || t == "int24") return WAVFMT_INT24;
+    if (t == "32" || t == "int32") return WAVFMT_INT32;
+    if (t == "float" || t == "float32") return WAVFMT_FLOAT32;
+    return WAVFMT_UNKNOWN;
+}
+
+const char* wav_format_tokens()
+{
+    return "8 (int8), 16 (int16), 24 (int24), 32 (int32), float (float32)";
+}
+
+uint16_t wav_format_bits(WavSampleFormat fmt)
+{
+    switch (fmt) {
+    case WAVFMT_INT8: return 8;
+    case WAVFMT_INT16: return 16;
+    case WAVFMT_INT24: return 24;
+    case WAVFMT_INT32: return 32;
+    case WAVFMT_FLOAT32: return 32;
+    default: return 0;
+    }
+}
+
+uint16_t wav_format_code(WavSampleFormat fmt)
+{
+    return fmt == WAVFMT_FLOAT32 ? 3 : 1;
+}
+
+// Scale and round one sample into an integer range, clamping instead of
+// wrapping around: a sample at or past +1.0 must come out as full scale, not as
+// the most negative value.
+static inline int64_t quantize(double v, double scale, int64_t lo, int64_t hi)
+{
+    double s = v * scale;
+    if (s != s) return 0; // NaN: write silence rather than a full-scale click
+    s = (s >= 0.0) ? floor(s + 0.5) : ceil(s - 0.5);
+    if (s < (double)lo) return lo;
+    if (s > (double)hi) return hi;
+    return (int64_t)s;
+}
+
+// The scale factors mirror the divisors in read_pcm_int(), so a value that came
+// from a file of the same depth writes back to the same bytes.
+size_t wav_write_samples(FILE* fp, WavSampleFormat fmt, const double* samples, size_t count)
+{
+    if (count == 0) return 0;
+    std::vector<uint8_t> out;
+    switch (fmt) {
+    case WAVFMT_INT8:
+        out.resize(count);
+        for (size_t k = 0; k < count; k++)
+            out[k] = (uint8_t)(quantize(samples[k], 128.0, -128, 127) + 128);
+        break;
+    case WAVFMT_INT16:
+        out.resize(count * 2);
+        for (size_t k = 0; k < count; k++) {
+            int32_t s = (int32_t)quantize(samples[k], 32768.0, -32768, 32767);
+            out[2 * k] = (uint8_t)(s & 0xFF);
+            out[2 * k + 1] = (uint8_t)((s >> 8) & 0xFF);
+        }
+        break;
+    case WAVFMT_INT24:
+        out.resize(count * 3);
+        for (size_t k = 0; k < count; k++) {
+            int32_t s = (int32_t)quantize(samples[k], 8388608.0, -8388608, 8388607);
+            out[3 * k] = (uint8_t)(s & 0xFF);
+            out[3 * k + 1] = (uint8_t)((s >> 8) & 0xFF);
+            out[3 * k + 2] = (uint8_t)((s >> 16) & 0xFF);
+        }
+        break;
+    case WAVFMT_INT32:
+        out.resize(count * 4);
+        for (size_t k = 0; k < count; k++) {
+            int32_t s = (int32_t)quantize(samples[k], 2147483648.0, -2147483648LL, 2147483647LL);
+            for (int b = 0; b < 4; b++) out[4 * k + b] = (uint8_t)((s >> (8 * b)) & 0xFF);
+        }
+        break;
+    case WAVFMT_FLOAT32: {
+        out.resize(count * 4);
+        for (size_t k = 0; k < count; k++) {
+            float f = (float)samples[k];
+            uint32_t bits;
+            memcpy(&bits, &f, 4);
+            for (int b = 0; b < 4; b++) out[4 * k + b] = (uint8_t)((bits >> (8 * b)) & 0xFF);
+        }
+        break;
+    }
+    default:
+        return 0;
+    }
+    const size_t bytes_per_sample = out.size() / count;
+    return fwrite(out.data(), bytes_per_sample, count, fp);
 }
 
 // Helper: pretty print some common format codes

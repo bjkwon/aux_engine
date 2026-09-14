@@ -117,6 +117,6 @@ There is no repository-wide formatter or lint target. Match surrounding style an
 - `GRAPHICS_MIGRATION_ROADMAP.md`: graphics migration direction and success criteria; verify current implementation before treating items as pending.
 - `docs/fget.md`: `fget` source forms, return type, prerequisites, and error behavior.
 - `docs/channel_indexing.md`: `.left(...)`/`.right(...)` channel-scoped assignment syntax, semantics, and errors.
-- `docs/audio_file_decoding.md`: codec allowlist and policy, `file()` format sniffing/dispatch, why MP3 has no dedicated builtin, and the `mp3_read_float32` contract.
+- `docs/audio_file_decoding.md`: codec allowlist and policy, `file()` format sniffing/dispatch, why MP3 has no dedicated builtin, the `mp3_read_float32` contract, and the `wavwrite` option string / header layout on the write side.
 - `/Users/bkwon/dev/auxlab2/GRAPHICS_HANDLE_IMPLEMENTATION_PLAN.md`: app-side graphics semantics and manual expectations for GUI behavior.
 - `/Users/bkwon/dev/auxlab2/README.md`, `TEST_PLAN_GRAPHICS_PLAY_RECORD.md`, and `MANUAL_CHECKLIST_AUXLAB2_GRAPHICS_PLAY_RECORD.md`: consult for app-specific graphics/play/record verification. A separate `auxlab2/AGENTS.md` should eventually hold this guidance.

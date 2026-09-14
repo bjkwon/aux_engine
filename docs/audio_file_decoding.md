@@ -1,4 +1,4 @@
-# Audio file decoding — WAV and MP3 (codec allowlist)
+# Audio file decoding and WAV writing — codec allowlist
 
 ## Purpose
 
@@ -86,11 +86,69 @@ point rather than assuming they already agree.
 
 ---
 
+## Writing: `wavwrite(x, filename [, option])`
+
+Encoding is WAV-only: `wavwrite` is the only audio writer; there is no MP3 encoder and adding one
+would reintroduce a licensing question that decoding does not have. `write(x, "f.wav", option)`
+forwards to `wavwrite` and accepts the same option string.
+
+The optional third argument is a whitespace/comma-separated token list, so future options can be
+added without another positional argument. The only tokens today select the sample format:
+
+| token | written as |
+| --- | --- |
+| (omitted) | 16-bit signed LE — the historical default |
+| `8`, `int8`, `uint8` | 8-bit unsigned (what the WAV spec requires at that depth) |
+| `16`, `int16` | 16-bit signed LE |
+| `24`, `int24` | 24-bit signed LE, three bytes packed |
+| `32`, `int32` | 32-bit signed LE |
+| `float`, `float32` | IEEE float32 (`audio_format` 3) |
+
+Tokens are case-insensitive. An unrecognized token, or two format tokens in one string, is an error
+rather than a silent fallback. The scale factors match the divisors in `read_pcm_int()`, so a file
+read at a given depth writes back to the same bytes.
+
+Integer formats **clamp** samples outside [-1, +1] (and map NaN to silence) instead of wrapping
+around, which the old `(int16_t)(x * 32768)` cast did — a sample at +1.0 used to come back as full
+negative scale. float32 stores out-of-range values as they are. Normalizing is deliberately not an
+option token: `wavwrite(x / max(abs(x)), f, "24")` says the same thing visibly in the script.
+
+### Header layout
+
+`make_wav_header()` returns the header size rather than assuming 44 bytes, because non-PCM output
+is not a canonical 44-byte header:
+
+| format | fmt chunk | extra | header size |
+| --- | --- | --- | --- |
+| PCM (1) — 8/16/24/32-bit int | 16 bytes | — | 44 |
+| IEEE float (3) — float32 | 18 bytes (`cbSize` = 0) | `fact` chunk, 4 bytes | 58 |
+
+The spec calls for `WAVEFORMATEX` (a `cbSize` field) and a `fact` chunk holding the per-channel
+sample count on any non-PCM format, so a reader can get the frame count without dividing the data
+size by a block align that may not apply. `wav_read_header()` skips chunks it does not recognize, so
+these files round-trip through `file()`; macOS CoreAudio (`afinfo`) reads them as `Float32`.
+
+`WAVE_FORMAT_EXTENSIBLE` (0xFFFE) is still never written. It is only *recommended* above 16 bits,
+and plain format-1 24-bit is read correctly everywhere in practice. The one case where it would buy
+something is 32-bit int: some readers infer float from the 32-bit width instead of honoring the
+format code. The reader side already parses extensible ([`parse_fmt_chunk`](../src/func/_file_wav.cpp)),
+so adding it for that case later would be additive.
+
+Resampling is likewise not an option token. `wave()` resamples on read to reach the environment rate
+(see above), but on write the environment rate is what gets stamped into the header; use
+`resample()` explicitly to change it.
+
+---
+
 ## Verification status
 
 There are no regression tests covering MP3 decoding (`grep mp3 test/` is empty) — it has only been
 exercised manually through `file()`. Adding coverage requires committing a small MP3 fixture, which
 is why it was not done alongside the initial decode support.
 
-Encoding remains WAV-only: `wavwrite` is the only audio writer; there is no MP3 encoder and adding
-one would reintroduce a licensing question that decoding does not have.
+WAV decoding and encoding are covered by `test/regression_wav_header.cpp`. On the write side each
+format round-trips through `wavwrite` → `file()` and is checked against the expected header fields
+(format code, bit depth, block align, fmt/fact/data chunk layout, data and RIFF sizes), along with
+clamping, case-insensitive tokens, and rejection of unknown or conflicting tokens. Output was also
+checked against macOS CoreAudio (`afinfo`), which is an independent parser; there is no automated
+cross-reader check in CI.
