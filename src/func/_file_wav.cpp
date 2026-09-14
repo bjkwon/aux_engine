@@ -246,6 +246,75 @@ int wav_read_header(const std::string& fname, WavInfo& out, std::string& estr)
     return headersize + 8; // adding 8 to the position where the data chunk is found
 }
 
+// Decode integer PCM (8/16/24/32 bit, little-endian) into out, which must be
+// sized frames2read*num_channels beforehand. Returns the number of frames read.
+static size_t read_pcm_int(FILE* fp, uint64_t frames2read, const WavInfo& info, std::vector<float>& out, std::string& estr)
+{
+    size_t res = 0;
+    uint64_t id = 0;
+    switch (info.bits_per_sample) {
+    case 8: {
+        //8bit unsigned
+        std::vector<uint8_t> temp_out(frames2read * info.num_channels, 0);
+        res = fread(temp_out.data(), info.block_align, frames2read, fp);
+        for (auto& v : out) { v = (float)temp_out[id++] / 128; v -= 1.f; }
+        break;
+    }
+    case 16: {
+        std::vector<int16_t> temp_out(frames2read * info.num_channels, 0);
+        res = fread(temp_out.data(), info.block_align, frames2read, fp);
+        for (auto& v : out) v = (float)temp_out[id++] / 32768;
+        break;
+    }
+    case 24: {
+        // 24-bit samples are packed three bytes each, little-endian, no padding.
+        // Sign-extend into int32 before scaling.
+        std::vector<uint8_t> temp_out((size_t)frames2read * info.block_align, 0);
+        res = fread(temp_out.data(), info.block_align, frames2read, fp);
+        for (auto& v : out) {
+            const uint8_t* p = temp_out.data() + id * 3;
+            int32_t s = (int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24);
+            s >>= 8; // arithmetic shift back down, sign preserved
+            v = (float)s / 8388608;
+            ++id;
+        }
+        break;
+    }
+    case 32: {
+        std::vector<int32_t> temp_out(frames2read * info.num_channels, 0);
+        res = fread(temp_out.data(), info.block_align, frames2read, fp);
+        for (auto& v : out) v = (float)temp_out[id++] / 2147483648;
+        break;
+    }
+    default:
+        estr = "Unsupported PCM bit depth.";
+        return 0;
+    }
+    return res;
+}
+
+// Decode IEEE float samples (32 or 64 bit) into out, which must be sized
+// frames2read*num_channels beforehand. Returns the number of frames read.
+static size_t read_pcm_float(FILE* fp, uint64_t frames2read, const WavInfo& info, std::vector<float>& out, std::string& estr)
+{
+    switch (info.bits_per_sample) {
+    case 32:
+        // float32 is the container type already; read straight into out.
+        return fread(out.data(), info.block_align, frames2read, fp);
+    case 64: {
+        // Never read doubles into out directly: it holds half the bytes per sample.
+        std::vector<double> temp_out(frames2read * info.num_channels, 0.0);
+        size_t res = fread(temp_out.data(), info.block_align, frames2read, fp);
+        uint64_t id = 0;
+        for (auto& v : out) v = (float)temp_out[id++];
+        return res;
+    }
+    default:
+        estr = "Unsupported IEEE float bit depth.";
+        return 0;
+    }
+}
+
 // Read from the data block of a wave file and put them to a float container output
 uint64_t wav_read_float32(FILE* fp, uint64_t frames2read, const WavInfo& info, std::vector<float>& out, std::string& estr)
 {
@@ -258,42 +327,27 @@ uint64_t wav_read_float32(FILE* fp, uint64_t frames2read, const WavInfo& info, s
         return 0;
     }
     out.resize(frames2read*info.num_channels);
-    uint64_t id=0;
     size_t res = 0; // must be initialized: callers size buffers with the return value
     switch (info.audio_format) {
         case 1:
-            if (info.bits_per_sample == 8) {
-                //8bit unsigned
-                std::vector<uint8_t> temp_out(frames2read * info.num_channels, 0);
-                res = fread(temp_out.data(), info.block_align, frames2read, fp);
-                for (auto &v : out) {v = (float)temp_out[id++] / 128; v -= 1.f;}
-            } else if (info.bits_per_sample == 16) {
-                std::vector<int16_t> temp_out(frames2read* info.num_channels, 0);
-                res = fread(temp_out.data(), info.block_align, frames2read, fp);
-                for (auto &v : out) v = (float)temp_out[id++] / 32768;
-            } else if (info.bits_per_sample == 24) {
-                estr = "24-bit PCM wav files are not supported yet.";
-                return 0;
-            } else {
-                estr = "Unknown PCM 1.";
-                return 0;                
-            }
+            res = read_pcm_int(fp, frames2read, info, out, estr);
+            if (!estr.empty()) return 0;
             break;
         case 0xFFFE:
-            if (is_pcm_guid(info.subformat_guid) && info.bits_per_sample == 32) {
-                    std::vector<int32_t> temp_out(frames2read * info.num_channels, 0);
-                    res = fread(temp_out.data(), info.block_align, frames2read, fp);
-                    for (auto &v : out) v = (float)temp_out[id++] / 2147483648;
+            if (is_pcm_guid(info.subformat_guid)) {
+                res = read_pcm_int(fp, frames2read, info, out, estr);
+                if (!estr.empty()) return 0;
             } else if (is_float_guid(info.subformat_guid)) {
-                res = fread(out.data(), info.block_align, frames2read, fp);
+                res = read_pcm_float(fp, frames2read, info, out, estr);
+                if (!estr.empty()) return 0;
             } else {
                 estr = "Not supported.";
-                return 0;                
+                return 0;
             }
         break;
         case 3:
-            // this part was not tested
-            res = fread(out.data(), info.block_align, frames2read, fp);
+            res = read_pcm_float(fp, frames2read, info, out, estr);
+            if (!estr.empty()) return 0;
         break;
         default:
             estr = "Unsupported wav audio format.";
