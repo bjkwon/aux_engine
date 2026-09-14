@@ -13,7 +13,16 @@ project(auxe VERSION ${AUXE_VERSION} LANGUAGES C CXX)
 # -----------------------------
 option(AUXE_BUILD_SHARED      "Build auxe as a shared library" ON)
 option(AUXE_ENABLE_PORTAUDIO  "Enable PortAudio-dependent built-ins" OFF)
-option(AUXE_BUILD_TESTS       "Build auxe regression tests" ON)
+# Regression tests are for developing auxe itself. When auxe is pulled into a
+# consumer (auxlab2 does add_subdirectory on this tree), default them off so the
+# consumer's `all` target doesn't build the test executables and fixtures.
+# CMAKE_SOURCE_DIR rather than PROJECT_IS_TOP_LEVEL: the latter needs CMake 3.21.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(AUXE_BUILD_TESTS_DEFAULT ON)
+else()
+  set(AUXE_BUILD_TESTS_DEFAULT OFF)
+endif()
+option(AUXE_BUILD_TESTS       "Build auxe regression tests" ${AUXE_BUILD_TESTS_DEFAULT})
 
 # -----------------------------
 # Language / compile settings
