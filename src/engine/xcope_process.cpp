@@ -804,6 +804,13 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 		uint16_t typelhs;
 		bool contig;
 		CVar index;
+		// channelWriteSel is per-assignment state set only on the .left/.right LHS path; clear it
+		// before and after (including on throw) so it never leaks into a later plain indexed write.
+		struct ChannelWriteSelReset {
+			int& sel;
+			~ChannelWriteSelReset() { sel = 0; }
+		} channelWriteSelReset{ channelWriteSel };
+		channelWriteSel = 0;
 		sanitize_cell_node(plhs);
 		eval_lhs(plhs, prhs, index, RHS, typelhs, contig, isreplica);
 		right_to_left(plhs, index, RHS, typelhs, contig, isreplica ? prhs:NULL);

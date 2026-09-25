@@ -609,6 +609,42 @@ static bool case_channel_write_requires_index(std::string& err) {
   return true;
 }
 
+static bool case_channel_write_does_not_leak_into_mono_indexed_write(std::string& err) {
+  // Regression: .right-scoped write left channelWriteSel set, so the next plain indexed write
+  // redirected to lvar.next (null for a mono vector) and crashed in adjust_buf.
+  Session s("case_channel_write_does_not_leak_into_mono_indexed_write");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(1000); silence(1000)]", "stereo silence setup") ||
+      !expect_eval_ok(s, "x.right(1:5)=0.5", "x.right(1:5)=0.5") ||
+      !expect_eval_ok(s, "y=1:5", "y=1:5") ||
+      !expect_eval_ok(s, "y(3)=10", "y(3)=10 after .right write") ||
+      !expect_vector_values(s, "y", {1, 2, 10, 4, 5}) ||
+      !expect_eval_ok(s, "y(2:3)=[20 30]", "y(2:3)=[20 30] after .right write") ||
+      !expect_vector_values(s, "y", {1, 20, 30, 4, 5})) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_channel_write_does_not_leak_into_stereo_whole_write(std::string& err) {
+  // Regression: a stale .right selector made a later whole-object x(...)=scalar skip the stereo
+  // type check and silently write only the right channel.
+  Session s("case_channel_write_does_not_leak_into_stereo_whole_write");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=[silence(1000); silence(1000)]", "stereo silence setup") ||
+      !expect_eval_ok(s, "x.right(1:5)=0.5", "x.right(1:5)=0.5") ||
+      !expect_eval_error(s, "x(6:8)=0.25", "x(6:8)=0.25 after .right write")) {
+    err = s.err;
+    return false;
+  }
+  if (!expect_channel_values(s, "x", 0, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, 1e-9, err))
+    return false;
+  if (!expect_channel_values(s, "x", 1, {0.5, 0.5, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0}, 1e-9, err))
+    return false;
+  return true;
+}
+
 static bool case_long_stereo_plus_equals_short_left_only_stereo(std::string& err) {
   Session s("case_long_stereo_plus_equals_short_left_only_stereo");
   if (!s.ok()) { err = s.err; return false; }
@@ -1129,6 +1165,8 @@ int main() {
     {"case_channel_lhs_rejects_computed_suffix", case_channel_lhs_rejects_computed_suffix},
     {"case_channel_write_requires_stereo", case_channel_write_requires_stereo},
     {"case_channel_write_requires_index", case_channel_write_requires_index},
+    {"case_channel_write_does_not_leak_into_mono_indexed_write", case_channel_write_does_not_leak_into_mono_indexed_write},
+    {"case_channel_write_does_not_leak_into_stereo_whole_write", case_channel_write_does_not_leak_into_stereo_whole_write},
     {"case_long_stereo_plus_equals_short_left_only_stereo", case_long_stereo_plus_equals_short_left_only_stereo},
   };
 
