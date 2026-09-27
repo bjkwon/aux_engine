@@ -11,6 +11,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 static const int AST_FLAG_ASYNC_ASSIGN = AST_SUPPRESS_ASYNC_ASSIGN;
 
@@ -208,10 +210,14 @@ bool AuxScope::get_nodes_left_right_sides(const AstNode* pnode, const AstNode** 
 	return searchtree(*prhs, T_REPLICA) != NULL;
 }
 
-void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index)
+void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index, bool* firstIndexWasLogical, CVar* logicalSelector)
 {
 	// input: pInd, psigBase
 	// output: index -- sig holding all indices
+	if (firstIndexWasLogical)
+		*firstIndexWasLogical = false;
+	if (logicalSelector)
+		logicalSelector->Reset();
 
 	// process the first index
 	ostringstream oss;
@@ -226,7 +232,14 @@ void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index)
 		}
 		else
 			index = Compute(pInd);
-		if (index.IsLogical()) index_array_satisfying_condition(index);
+		if (index.IsLogical())
+		{
+			if (firstIndexWasLogical)
+				*firstIndexWasLogical = true;
+			if (logicalSelector)
+				*logicalSelector = index;
+			index_array_satisfying_condition(index);
+		}
 		// process the second index, if it exists
 		if (pInd->next)
 		{
@@ -270,33 +283,16 @@ void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index)
 
 const CVar* AuxScope::get_cell_item(const AstNode* plhs, const CVar &cellobj)
 { // from CNodeProbe::cell_indexing
-	CVar* out;
 	size_t cellind = (size_t)(plhs->alt->dval); // check the validity of ind...probably it will be longer than this.
 	ostringstream oss;
-	if (cellobj.type() & TYPEBIT_CELL)
+	if (!(cellobj.type() & TYPEBIT_CELL))
+		throw exception_etc(*this, plhs, "Temporal block selection is read-only.").raise();
+	if (cellind > cellobj.cell.size())
 	{
-		if (cellind > cellobj.cell.size())
-		{
-			oss << "Cell index " << cellind;
-			throw exception_range(*this, plhs->alt, oss.str().c_str(), plhs->str);
-		}
-		return &cellobj.cell[cellind - 1];
-		//if (plhs->child && root->child && pbase->searchtree(root->child, T_REPLICA))
-		//	pbase->replica_prep(&pbase->Sig);
+		oss << "Cell index " << cellind;
+		throw exception_range(*this, plhs->alt, oss.str().c_str(), plhs->str);
 	}
-	else
-	{ // in this case x{2} means second chain
-		printf("********************************\n");
-		if (cellind > cellobj.CountChains())
-		{
-			oss << "Cell index " << cellind;
-			throw exception_range(*this, plhs->alt, oss.str().c_str(), plhs->str).raise();
-		}
-		CTimeSeries* pout = (CTimeSeries*)&cellobj;
-		for (size_t k = 0; k < cellind; k++, pout = pout->chain) {}
-		out = (CVar*)pout;
-	}
-	return out;
+	return &cellobj.cell[cellind - 1];
 }
 // left var is available through Vars.find
 void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_index, CVar& RHS, uint16_t &typelhs, bool &contig, bool isreplica, const CVar* cell_item)
@@ -324,6 +320,9 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
 		const CVar* pvarLHS;
 		const CVar* struct_item = NULL;
 		const AstNode* pstruct = NULL;
+		for (const AstNode* suffix = plhs->alt; suffix; suffix = suffix->alt)
+			if (suffix->type == N_STRUCT && suffix->str && !strcmp(suffix->str, "blockat"))
+				throw exception_etc(*this, suffix, "Temporal block selection is read-only.").raise();
 		// if lvalue is not eligible for a statement, throw here
 		if (prhs) {
 			if (pEnv->IsValidBuiltin(plhs->str))
@@ -381,6 +380,12 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
 		{ // left var is available but no indexing is indicated--> replacing it with a new RHS
 			typelhs = TYPEBIT_NULL;
 			return;
+		}
+		if (plhs->alt->type == N_CELL && !(pvarLHS->type() & TYPEBIT_CELL))
+		{
+			if (ISTEMPORAL(pvarLHS->type()))
+				throw exception_etc(*this, plhs, "Temporal block selection is read-only.").raise();
+			throw exception_etc(*this, plhs, "Brace selection requires a cell or mono temporal object.").raise();
 		}
 		if (plhs->alt->type == N_STRUCT) // look at the prop item, not the base one
 		{
@@ -508,6 +513,8 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 					// (not a copy, unlike the read-side left()/right() builtins which mutate Sig).
 					if (!plhs->alt->alt)
 						throw exception_etc(*this, plhs, string(".") + plhs->alt->str + " must be used with an index on the LHS, e.g. x." + plhs->alt->str + "(t1~t2) = ...").raise();
+					if (plhs->alt->alt->type == N_CELL)
+						throw exception_etc(*this, plhs, "Temporal block selection is read-only.").raise();
 					if (plhs->alt->alt->type != N_ARGS && plhs->alt->alt->type != N_TIME_EXTRACT)
 						throw exception_etc(*this, plhs, string(".") + plhs->alt->str + " on the LHS must be followed directly by an index, e.g. x." + plhs->alt->str + "(t1~t2) = ...").raise();
 					if (!pvarLHS->next)
@@ -623,6 +630,85 @@ void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, b
 			}
 		out.SetNextChan(sec);
 	}
+}
+
+static bool extract_audio_channel_by_logical_condition(CSignals& out, const CTimeSeries& selector, const CTimeSeries& source)
+{
+	if (selector.GetFs() != source.GetFs())
+		return false;
+
+	CSignals selected(source.GetFs());
+	CTimeSeries* tail = NULL;
+	const CTimeSeries* maskPart = &selector;
+	const CTimeSeries* sourcePart = &source;
+	while (maskPart && sourcePart)
+	{
+		if (!maskPart->IsLogical() || maskPart->nSamples != sourcePart->nSamples ||
+			fabs(maskPart->tmark - sourcePart->tmark) > .5 * 1000. / source.GetFs())
+			return false;
+
+		uint64_t begin = 0;
+		while (begin < maskPart->nSamples)
+		{
+			while (begin < maskPart->nSamples && !maskPart->logbuf[begin])
+				++begin;
+			if (begin == maskPart->nSamples)
+				break;
+			uint64_t end = begin + 1;
+			while (end < maskPart->nSamples && maskPart->logbuf[end])
+				++end;
+
+			CTimeSeries part(source.GetFs());
+			part.bufType = sourcePart->bufType;
+			part.bufBlockSize = sourcePart->bufBlockSize;
+			part.UpdateBuffer(end - begin);
+			part.nGroups = 1;
+			part.tmark = sourcePart->tmark + begin * 1000. / source.GetFs();
+			part.snap = sourcePart->snap;
+			memcpy(part.logbuf, sourcePart->logbuf + begin * sourcePart->bufBlockSize,
+				(end - begin) * sourcePart->bufBlockSize);
+
+			if (!tail)
+			{
+				selected = part;
+				tail = &selected;
+			}
+			else
+			{
+				tail->chain = new CTimeSeries(part);
+				tail = tail->chain;
+			}
+			begin = end;
+		}
+		maskPart = maskPart->chain;
+		sourcePart = sourcePart->chain;
+	}
+	if (maskPart || sourcePart)
+		return false;
+
+	out = selected;
+	return true;
+}
+
+bool AuxScope::extract_audio_by_logical_condition(CVar& out, const CVar& selector, const CVar& obj)
+{
+	if (!ISAUDIO(obj.type()) || !selector.IsLogical())
+		return false;
+
+	CSignals left;
+	if (!extract_audio_channel_by_logical_condition(left, selector, obj))
+		return false;
+
+	CVar selected(left);
+	if (obj.next)
+	{
+		CSignals right;
+		if (!extract_audio_channel_by_logical_condition(right, selector, *obj.next))
+			return false;
+		selected.SetNextChan(right);
+	}
+	out = selected;
+	return true;
 }
 
 /* Assume that lvar is either a scalar, vector, audiosig, or tseq and has already been evaluated
@@ -752,8 +838,10 @@ void AuxScope::sanitize_cell_node(const AstNode* p)
 	if (p->alt && p->alt->type == N_CELL)
 	{
 		Compute(p->alt->child);
-		if (!ISSCALARG(Sig.type()))
-			throw exception_etc(*this, p, "Cell index must be a scalar").raise();
+		if (!ISSCALARG(Sig.type()) || !std::isfinite(Sig.value()) ||
+			Sig.value() < 1. || std::floor(Sig.value()) != Sig.value() ||
+			Sig.value() >= std::ldexp(1., std::numeric_limits<size_t>::digits))
+			throw exception_etc(*this, p, "Brace index must be a positive integer scalar.").raise();
 		p->alt->dval = Sig.value();
 	}
 }

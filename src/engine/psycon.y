@@ -24,15 +24,6 @@ char *ErrorMsg = NULL;
 int yylex (void);
 void yyerror (AstNode **pproot, char **errmsg, char const *s);
 
-#define TIME_UNIT_S 1
-#define TIME_UNIT_M 2
-#define TIME_UNIT_H 4
-#define N_TIME_BARE_TMP 12000
-
-typedef struct TimeUnitValue_t {
-	double scale_ms;
-	int mask;
-} TimeUnitValue;
 %}
 
 /* Bison declarations. */
@@ -43,7 +34,6 @@ typedef struct TimeUnitValue_t {
 
 %union {
 	double dval;
-	TimeUnitValue tunit;
 	char *str;
 	AstNode *pnode;
 }
@@ -82,8 +72,7 @@ typedef struct TimeUnitValue_t {
 %token <str> T_STRING "string"	T_ID "identifier"
 %token T_ENDPOINT T_FULLRANGE
 
-%type <pnode> block block_func line line_func stmt shell shellarg auxsys debug funcdef elseif_list condition conditional case_list id_list arg arg_list vector matrix range exp_range assign exp expcondition initcell compop assign2this tid csig varblock func_decl time_value time_number_explicit time_piece time_range time_vector
-%type <tunit> time_unit
+%type <pnode> block block_func line line_func stmt shell shellarg auxsys debug funcdef elseif_list condition conditional case_list id_list arg arg_list vector matrix range exp_range assign exp expcondition initcell compop assign2this tid csig varblock func_decl
 
 %right '='
 %right '\''
@@ -135,14 +124,6 @@ void print_token_value(FILE *file, int type, YYSTYPE value);
 char *getT_ID_str(AstNode *p);
 void handle_tilde(AstNode *proot, AstNode *pp, YYLTYPE loc);
 int consumeNumberUnitMask(int line, int col);
-int countUnitBits(int mask);
-int getSingleUnitMask(int mask);
-double getScaleFromMask(int mask);
-int parseTimeUnitName(const char *name, TimeUnitValue *out);
-void clearTimeNodeMeta(AstNode *p);
-void resolveSingleTimeNode(AstNode *p);
-int resolveTimePair(AstNode *first, AstNode *second);
-int resolveTimeVector(AstNode *vectorNode);
 int consumeAsyncAssignMarker(int line, int col);
 %}
 
@@ -247,7 +228,7 @@ line:	T_NEWLINE
 	|  tid '|' T_ID T_NUMBER
 	{
 		$$ = $1;
-		$$->tail = newAstNode(T_ID, @$); 
+		$$->tail = newAstNode(T_ID, @$);
 		$$->tail->str = $3;
 		$$->tail->dval = $4;
 	}
@@ -654,71 +635,8 @@ id_list: /* empty */
 	}
 ;
 
-time_unit: T_ID
-	{
-		if (!parseTimeUnitName($1, &$$))
-		{
-			free($1);
-			yyerror(pproot, errmsg, "syntax error, invalid time unit");
-			YYERROR;
-		}
-		free($1);
-	}
-;
-
-time_piece: T_NUMBER time_unit
-	{
-		$$ = newAstNode(T_NUMBER, @$);
-		$$->dval = $1 * $2.scale_ms;
-		$$->suppress = $2.mask;
-	}
-	| '-' T_NUMBER time_unit
-	{
-		$$ = newAstNode(T_NUMBER, @$);
-		$$->dval = -$2 * $3.scale_ms;
-		$$->suppress = $3.mask;
-	}
-;
-
-time_number_explicit: time_piece
-	| time_number_explicit time_piece
-	{
-		$$ = $1;
-		$$->dval += $2->dval;
-		$$->suppress |= $2->suppress;
-		yydeleteAstNode($2, 1);
-	}
-;
-
-time_value: T_NUMBER
-	{
-		$$ = newAstNode(N_TIME_BARE_TMP, @$);
-		$$->dval = $1;
-	}
-	| '-' T_NUMBER
-	{
-		$$ = newAstNode(N_TIME_BARE_TMP, @$);
-		$$->dval = -$2;
-	}
-	| time_number_explicit
-;
-
-time_range: time_value '~' time_value
-	{
-		if (!resolveTimePair($1, $3))
-		{
-			yydeleteAstNode($1, 1);
-			yydeleteAstNode($3, 1);
-			yyerror(pproot, errmsg, "syntax error, ambiguous skipped time unit");
-			YYERROR;
-		}
-		$$ = makeFunctionCall("respeed", $1, $3, @$);
-	}
-;
-
 arg: ':'
 	{	$$ = newAstNode(T_FULLRANGE, @$); }
-	| time_range
 	| exp_range
 	| initcell
 ;
@@ -794,27 +712,6 @@ vector: exp_range
 		$$ = $1;
 	}
 	| vector ',' exp_range
-	{
-		AstNode * p = (AstNode *)$1->str;
-		p->tail = p->tail->next = $3;
-		$$ = $1;
-	}
-;
-
-time_vector: time_value
-	{
-		$$ = newAstNode(N_VECTOR, @$);
-		AstNode * p = newAstNode(N_VECTOR, @$);
-		p->alt = p->tail = $1;
-		$$->str = (char*)p;
-	}
-	| time_vector time_value
-	{
-		AstNode * p = (AstNode *)$1->str;
-		p->tail = p->tail->next = $2;
-		$$ = $1;
-	}
-	| time_vector ',' time_value
 	{
 		AstNode * p = (AstNode *)$1->str;
 		p->tail = p->tail->next = $3;
@@ -956,8 +853,12 @@ varblock:	 T_ID
 	| varblock '{' exp '}'
 	{
 		$$ = $1;
-		$$->tail = $$->alt->alt = newAstNode(N_CELL, @$);
-		$$->tail->child = $3;
+		AstNode *p = newAstNode(N_CELL, @$);
+		p->child = $3;
+		if ($$->tail)
+			$$->tail = $$->tail->alt = p;
+		else
+			$$->tail = $$->alt = p;
 	}
 	| '[' vector ']'
 	{//tid-vector --> what's this comment? 12/30/2020
@@ -978,22 +879,6 @@ tid: varblock
 		$$ = newAstNode(T_ID, @$);
 		$$->str = $1;
 		handle_tilde($$, $3, @3);
-	}
-	| T_ID '{' exp '}'
-	{
-		$$ = newAstNode(T_ID, @$);
-		$$->str = $1;
-		$$->tail = $$->alt = newAstNode(N_CELL, @$);
-		$$->alt->child = $3;
-	}
-	| T_ID '{' exp '}' '(' arg_list ')'
-	{
-		$$ = newAstNode(T_ID, @$);
-		$$->str = $1;
-		$$->alt = newAstNode(N_CELL, @$);
-		$$->alt->child = $3;
-		handle_tilde($$->alt, $6, @6);
-		$$->tail = $$->alt->alt; // we need this; or tail is broken and can't put '.' tid at the end
 	}
 	| varblock '(' arg_list ')'
 	{
@@ -1038,41 +923,21 @@ tid: varblock
 	| tid '\''
 	{
 		$$ = newAstNode(T_TRANSPOSE, @$);
- 		$$->child = $1;
+		$$->child = $1;
 	}
-	| '[' time_vector ']' '[' ']'
+	| '[' vector ']' '[' ']'
 	{
-		if (!resolveTimeVector($2))
-		{
-			yydeleteAstNode($2, 1);
-			yyerror(pproot, errmsg, "syntax error, ambiguous skipped time unit");
-			YYERROR;
-		}
 		$$ = newAstNode(N_TSEQ, @$);
 		$$->child = $2;
 	}
-	| '[' time_vector ']' '[' vector ']'
+	| '[' vector ']' '[' vector ']'
 	{
-		if (!resolveTimeVector($2))
-		{
-			yydeleteAstNode($2, 1);
-			yydeleteAstNode($5, 1);
-			yyerror(pproot, errmsg, "syntax error, ambiguous skipped time unit");
-			YYERROR;
-		}
 		$$ = newAstNode(N_TSEQ, @$);
 		$$->child = $2;
 		$$->child->next = $5;
 	}
-	| '[' time_vector ']' '[' matrix ']'
+	| '[' vector ']' '[' matrix ']'
 	{
-		if (!resolveTimeVector($2))
-		{
-			yydeleteAstNode($2, 1);
-			yydeleteAstNode($5, 1);
-			yyerror(pproot, errmsg, "syntax error, ambiguous skipped time unit");
-			YYERROR;
-		}
 		$$ = newAstNode(N_TSEQ, @$);
 		$$->child = $2;
 		$$->child->next = $5;
@@ -1219,11 +1084,6 @@ exp: initcell
 	{ $$ = makeFunctionCall("movespec", $1, $3, @$);}
 	| exp '@' exp
 	{ $$ = makeBinaryOpNode('@', $1, $3, @$);}
-	| exp T_OP_SHIFT time_value %prec T_OP_SHIFT
-	{
-		resolveSingleTimeNode($3);
-		$$ = makeBinaryOpNode(T_OP_SHIFT, $1, $3, @$);
-	}
 	| exp T_OP_SHIFT exp
 	{ $$ = makeBinaryOpNode(T_OP_SHIFT, $1, $3, @$);}
 	| exp T_OP_CONCAT exp
@@ -1294,9 +1154,15 @@ int getTokenID(const char *str)
 				break;
 	}
 	if (i < YYNTOKENS)
-		return yytoknum[i];
+	{
+		int token;
+		for (token = 0; token <= YYMAXUTOK; ++token)
+			if ((int)YYTRANSLATE(token) == (int)i)
+				return token;
+	}
 	else
 		return T_UNKNOWN;
+	return T_UNKNOWN;
 }
 
 
@@ -1307,163 +1173,6 @@ void print_token_value(FILE *file, int type, YYSTYPE value)
 	else if (type == T_NUMBER)
 		fprintf (file, "%f", value.dval);
 }
-
-int countUnitBits(int mask)
-{
-	int count = 0;
-	if (mask & TIME_UNIT_S) ++count;
-	if (mask & TIME_UNIT_M) ++count;
-	if (mask & TIME_UNIT_H) ++count;
-	return count;
-}
-
-int getSingleUnitMask(int mask)
-{
-	if (countUnitBits(mask) != 1)
-		return 0;
-	if (mask & TIME_UNIT_S) return TIME_UNIT_S;
-	if (mask & TIME_UNIT_M) return TIME_UNIT_M;
-	if (mask & TIME_UNIT_H) return TIME_UNIT_H;
-	return 0;
-}
-
-double getScaleFromMask(int mask)
-{
-	if (mask == TIME_UNIT_S) return 1000.;
-	if (mask == TIME_UNIT_M) return 60000.;
-	if (mask == TIME_UNIT_H) return 3600000.;
-	return 1.;
-}
-
-int parseTimeUnitName(const char *name, TimeUnitValue *out)
-{
-	if (!strcmp(name, "s"))
-	{
-		out->scale_ms = 1000.;
-		out->mask = TIME_UNIT_S;
-		return 1;
-	}
-	if (!strcmp(name, "m"))
-	{
-		out->scale_ms = 60000.;
-		out->mask = TIME_UNIT_M;
-		return 1;
-	}
-	if (!strcmp(name, "h"))
-	{
-		out->scale_ms = 3600000.;
-		out->mask = TIME_UNIT_H;
-		return 1;
-	}
-	return 0;
-}
-
-void clearTimeNodeMeta(AstNode *p)
-{
-	if (p)
-		p->suppress = 0;
-}
-
-void resolveSingleTimeNode(AstNode *p)
-{
-	if (!p)
-		return;
-	if (p->type == N_TIME_BARE_TMP)
-		p->type = T_NUMBER;
-	clearTimeNodeMeta(p);
-}
-
-int resolveTimePair(AstNode *first, AstNode *second)
-{
-	AstNode *items[2];
-	int unitMask = 0, explicitCount = 0, bareCount = 0;
-	int i;
-	int single;
-	double scale;
-	items[0] = first;
-	items[1] = second;
-
-	for (i = 0; i < 2; ++i)
-	{
-		if (items[i]->type == N_TIME_BARE_TMP)
-			++bareCount;
-		else if (items[i]->type == T_NUMBER)
-		{
-			++explicitCount;
-			unitMask |= items[i]->suppress;
-		}
-	}
-
-	if (explicitCount == 0)
-	{
-		resolveSingleTimeNode(first);
-		if (second != first)
-			resolveSingleTimeNode(second);
-		return 1;
-	}
-
-	if (bareCount > 0)
-	{
-		single = getSingleUnitMask(unitMask);
-		if (!single)
-			return 0;
-		scale = getScaleFromMask(single);
-		for (i = 0; i < 2; ++i)
-			if (items[i]->type == N_TIME_BARE_TMP)
-				items[i]->dval *= scale;
-	}
-
-	resolveSingleTimeNode(first);
-	if (second != first)
-		resolveSingleTimeNode(second);
-	return 1;
-}
-
-int resolveTimeVector(AstNode *vectorNode)
-{
-	if (!vectorNode || vectorNode->type != N_VECTOR || !vectorNode->str)
-		return 0;
-
-	AstNode *inner = (AstNode *)vectorNode->str;
-	AstNode *p;
-	int unitMask = 0, explicitCount = 0, bareCount = 0;
-	int single;
-	double scale;
-
-	for (p = inner->alt; p; p = p->next)
-	{
-		if (p->type == N_TIME_BARE_TMP)
-			++bareCount;
-		else if (p->type == T_NUMBER)
-		{
-			++explicitCount;
-			unitMask |= p->suppress;
-		}
-	}
-
-	if (explicitCount == 0)
-	{
-		for (p = inner->alt; p; p = p->next)
-			resolveSingleTimeNode(p);
-		return 1;
-	}
-
-	if (bareCount > 0)
-	{
-		single = getSingleUnitMask(unitMask);
-		if (!single)
-			return 0;
-		scale = getScaleFromMask(single);
-		for (p = inner->alt; p; p = p->next)
-			if (p->type == N_TIME_BARE_TMP)
-				p->dval *= scale;
-	}
-
-	for (p = inner->alt; p; p = p->next)
-		resolveSingleTimeNode(p);
-	return 1;
-}
-
 
 char *getAstNodeName(AstNode *p)
 {

@@ -70,6 +70,9 @@ This keeps auxe independent of storage formats outside its small codec allowlist
 - `docs/external_modules.md`
   External native module syntax, registry layout, manifest format, C ABI, value conversion, and static/dot-call rules
 
+- `plans/temporal_block_selection.md`
+  Mono temporal-chain block selection by ordinal or containing timepoint
+
 - `example_apps/aux/`
   Console app (this is included for illustration purposes. Ideally this should be in a separate repo.
 

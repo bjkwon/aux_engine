@@ -293,6 +293,20 @@ if(AUXE_BUILD_TESTS)
     COMMAND auxe_regression_eval_errors
   )
 
+  add_executable(auxe_regression_temporal_blocks
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_temporal_blocks.cpp
+  )
+  target_link_libraries(auxe_regression_temporal_blocks PRIVATE auxe)
+  target_include_directories(auxe_regression_temporal_blocks PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
+  )
+
+  add_test(
+    NAME auxe_regression_temporal_blocks
+    COMMAND auxe_regression_temporal_blocks
+  )
+
   add_executable(auxe_regression_wav_header
     ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_wav_header.cpp
   )

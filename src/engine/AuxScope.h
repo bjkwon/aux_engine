@@ -321,6 +321,8 @@ public:
 	void ResumePausedUDF();
 	FILE* fopen_from_path(const string& fname, const string& ext, string& fullfilename);
 	void HandleAuxFunction(const AstNode* pnode);
+	CVar temporal_block_by_ordinal(const CVar& source, uint64_t ordinal, const AstNode* pnode);
+	CVar temporal_block_at(const CVar& source, double timepoint, const AstNode* pnode);
 	CVar* TSeq(const AstNode* pnode, AstNode* p);
 	void HandleMathFunc(string& fname, const body& arg);
 	CSignals gettimepoints(CTimeSeries* psig, const AstNode* pnode);
@@ -388,8 +390,9 @@ private:
 	void eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar& lhs_index, CVar& RHS, uint16_t& typelhs, bool& contig, bool isreplica, const CVar* cell_item = NULL);
 	void mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* plhs, const AstNode* prhs);
 	void extract_by_index(CVar& out, const CVar& index, const CVar& obj, bool contig);
+	bool extract_audio_by_logical_condition(CVar& out, const CVar& selector, const CVar& obj);
 	void right_to_left(const AstNode* plhs, const CVar& lhs_index, CVar& robj, uint16_t typelhs, bool contig, const AstNode* prhs = NULL, CVar* lobj = NULL);
-	void eval_index(const AstNode* pInd, const CVar& varLHS, CVar& index);
+	void eval_index(const AstNode* pInd, const CVar& varLHS, CVar& index, bool* firstIndexWasLogical = NULL, CVar* logicalSelector = NULL);
 	void insertreplace(const AstNode* pnode, const CVar& sec, const CVar& indsig, CVar* lobj, bool isreplica);
 	const CVar* get_cell_item(const AstNode* plhs, const CVar& cellobj);
 	void adjust_buf(CSignals& lobj, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn);

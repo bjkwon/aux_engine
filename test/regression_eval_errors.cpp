@@ -206,6 +206,27 @@ static bool expect_matrix_preview_values(Session& s, const std::string& varName,
   return true;
 }
 
+static bool expect_described_size(Session& s, const std::string& varName, const std::string& expectedSize) {
+  AuxObj obj = aux_get_var(s.ctx, varName);
+  if (!obj) {
+    s.err = "Variable not found: " + varName;
+    return false;
+  }
+  uint16_t type = 0;
+  std::string size;
+  std::string preview;
+  if (aux_describe_var(s.ctx, obj, s.cfg, type, size, preview) != 0) {
+    s.err = "aux_describe_var failed for " + varName;
+    return false;
+  }
+  if (size != expectedSize) {
+    s.err = "Unexpected size for " + varName + ": got " + size +
+            ", expected " + expectedSize + ", preview=" + preview;
+    return false;
+  }
+  return true;
+}
+
 static bool case_empty_index_read_returns_null(std::string& err) {
   Session s("case_empty_index_read_returns_null");
   if (!s.ok()) { err = s.err; return false; }
@@ -268,6 +289,58 @@ static bool case_ungroup_overlap_reverses_group_overlap(std::string& err) {
       !expect_vector_values(s, "u", {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})) {
     err = s.err;
     return false;
+  }
+  return true;
+}
+
+static bool case_logical_index_flattens_grouped_read_but_not_write(std::string& err) {
+  Session s("case_logical_index_flattens_grouped_read_but_not_write");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "g=(1:24).group(6)", "grouped conditional-index setup") ||
+      !expect_eval_ok(s, "flat=g(g>10)", "logical read from grouped value") ||
+      !expect_vector_values(s, "flat", {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}) ||
+      !expect_described_size(s, "flat", "14") ||
+      !expect_eval_ok(s, "g(g>10)=..+100", "logical replicator write to grouped value") ||
+      !expect_matrix_preview_values(s, "g", "6x4",
+                                    {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 111, 112,
+                                     113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124}) ||
+      !expect_eval_ok(s, "rows=g((1:end)%2==0,2)", "dimension-specific logical indexing") ||
+      !expect_matrix_preview_values(s, "rows", "3x1", {6, 114, 122})) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_audio_logical_index_preserves_true_run_timing(std::string& err) {
+  Session s("case_audio_logical_index_preserves_true_run_timing");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "a=tone(100,50); apos=a(a>0)", "audio logical indexing")) {
+    err = s.err;
+    return false;
+  }
+
+  AuxObj apos = aux_get_var(s.ctx, "apos");
+  if (!apos || !aux_is_audio(apos) || aux_num_channels(apos) != 1 || aux_num_segments(apos, 0) != 5) {
+    err = "apos should be mono audio with five retained-time segments.";
+    return false;
+  }
+  const double sampleMs = 1000.0 / s.cfg.sample_rate;
+  for (int i = 0; i < 5; ++i) {
+    AuxSignal segment{};
+    if (!aux_get_segment(apos, 0, i, segment)) {
+      err = "Could not read apos segment " + std::to_string(i) + ".";
+      return false;
+    }
+    const double expectedStart = i * 10.0;
+    const double actualEnd = segment.tmark + segment.nSamples * 1000.0 / segment.fs;
+    if (std::fabs(segment.tmark - expectedStart) > sampleMs * 1.1 ||
+        std::fabs(actualEnd - (expectedStart + 5.0)) > sampleMs * 1.1) {
+      err = "Unexpected apos segment timing at segment " + std::to_string(i) +
+            ": start=" + std::to_string(segment.tmark) +
+            ", end=" + std::to_string(actualEnd);
+      return false;
+    }
   }
   return true;
 }
@@ -1148,6 +1221,8 @@ int main() {
     {"case_group_overlap_uses_second_method_arg", case_group_overlap_uses_second_method_arg},
     {"case_group_overlap_pads_partial_final_group", case_group_overlap_pads_partial_final_group},
     {"case_ungroup_overlap_reverses_group_overlap", case_ungroup_overlap_reverses_group_overlap},
+    {"case_logical_index_flattens_grouped_read_but_not_write", case_logical_index_flattens_grouped_read_but_not_write},
+    {"case_audio_logical_index_preserves_true_run_timing", case_audio_logical_index_preserves_true_run_timing},
     {"case_empty_index_write_null_is_noop", case_empty_index_write_null_is_noop},
     {"case_empty_index_write_nonnull_is_error", case_empty_index_write_nonnull_is_error},
     {"case_end_index_on_empty_lhs_is_error", case_end_index_on_empty_lhs_is_error},

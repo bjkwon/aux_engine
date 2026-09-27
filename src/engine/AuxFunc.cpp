@@ -178,6 +178,7 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("vector", vector);
 	SET_BUILTIN_FUNC("left", leftright);
 	SET_BUILTIN_FUNC("right", leftright);
+	SET_BUILTIN_FUNC("blockat", blockat);
 	SET_BUILTIN_FUNC("hilbert", hilbenvlope);
 	SET_BUILTIN_FUNC("envlope", hilbenvlope);
 	SET_BUILTIN_FUNC("fopen", fopen);

@@ -10,6 +10,8 @@
 #include "utils.h"
 #include <assert.h>
 #include <thread>
+#include <cmath>
+#include <limits>
 
 using namespace std;
 
@@ -24,6 +26,57 @@ using namespace std;
 
 int GetFileText(FILE* fp, string& strOut); // utils.cpp
 void auxe_close_native_modules(EngineRuntime& runtime); // native_module_loader.cpp
+
+CVar AuxScope::temporal_block_by_ordinal(const CVar& source, uint64_t ordinal, const AstNode* pnode)
+{
+	if (!source.cell.empty() || !ISTEMPORALG(source.type()))
+		throw exception_etc(*this, pnode, "Brace selection requires a cell or mono temporal object.").raise();
+	if (source.next)
+		throw exception_etc(*this, pnode, "Temporal block selection requires a mono object; use .left or .right first.").raise();
+	if (ordinal == 0)
+		throw exception_etc(*this, pnode, "Brace index must be a positive integer scalar.").raise();
+
+	const CTimeSeries* selected = &source;
+	for (uint64_t current = 1; current < ordinal && selected; ++current)
+		selected = selected->chain;
+	if (!selected)
+	{
+		ostringstream out;
+		out << "Temporal block index " << ordinal;
+		throw exception_range(*this, pnode, out.str(), "").raise();
+	}
+
+	CVar result;
+	result.CTimeSeries::operator=(static_cast<const CSignal&>(*selected));
+	return result;
+}
+
+CVar AuxScope::temporal_block_at(const CVar& source, double timepoint, const AstNode* pnode)
+{
+	if (!source.cell.empty() || !ISTEMPORALG(source.type()))
+		throw exception_etc(*this, pnode, "blockat() requires a mono temporal receiver.").raise();
+	if (source.next)
+		throw exception_etc(*this, pnode, "blockat() requires a mono object; use .left or .right first.").raise();
+	if (!std::isfinite(timepoint))
+		throw exception_etc(*this, pnode, "blockat() timepoint must be finite.").raise();
+
+	const CTimeSeries* selected = nullptr;
+	for (const CTimeSeries* block = &source; block; block = block->chain)
+	{
+		if (timepoint >= block->tmark && timepoint < block->CSignal::endt())
+		{
+			if (selected)
+				throw exception_etc(*this, pnode, "blockat() timepoint occurs in more than one block.").raise();
+			selected = block;
+		}
+	}
+	if (!selected)
+		throw exception_etc(*this, pnode, "blockat() timepoint does not occur in any block.").raise();
+
+	CVar result;
+	result.CTimeSeries::operator=(static_cast<const CSignal&>(*selected));
+	return result;
+}
 
 #ifndef _WIN32
 static string preferred_relative_base_dir(const vector<string>& auxPaths)
@@ -951,7 +1004,6 @@ CVar* AuxScope::TSeq(const AstNode* pnode, AstNode* p)
 
 static AstNode* get_next_parsible_node(AstNode* pn)
 {
-	if (pn->alt && pn->alt->type == N_CELL) pn = pn->alt;
 	return pn->alt;
 }
 
@@ -1322,7 +1374,7 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 			throw exception_etc(*this, ptree, string(ptree->str) + "() requires parentheses for a zero-argument function call.").raise();
 		AstNode* channelSelectorIndex = nullptr;
 		if (is_channel_selector_suffix(ptree) && ptree->alt &&
-			(ptree->alt->type == N_ARGS || ptree->alt->type == N_TIME_EXTRACT))
+			(ptree->alt->type == N_ARGS || ptree->alt->type == N_TIME_EXTRACT || ptree->alt->type == N_CELL))
 		{
 			channelSelectorIndex = ptree->alt;
 			ChannelSelectorAltGuard guard(ptree, channelSelectorIndex);
@@ -1346,11 +1398,26 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 	{
 		CVar base = **psigBase;
 		CVar ind;
-		eval_index(ptree->child, base, ind);
-		if (ind.nSamples == 0)
+		CVar logicalSelector;
+		bool firstIndexWasLogical = false;
+		eval_index(ptree->child, base, ind, &firstIndexWasLogical, &logicalSelector);
+		const bool singleIndex = ptree->child && !ptree->child->next;
+		if (firstIndexWasLogical && singleIndex && ISAUDIO(base.type()) &&
+			extract_audio_by_logical_condition(Sig, logicalSelector, base))
+		{
+			// Logical audio indexing keeps each contiguous true run at its original time.
+		}
+		else if (ind.nSamples == 0)
 			Sig.Reset();
 		else
+		{
+			// A single logical mask addresses the serialized contents of a grouped value.
+			// Reading through that mask therefore returns a vector; indexed writes still use
+			// the original grouped LHS and retain its shape.
+			if (firstIndexWasLogical && singleIndex && base.nGroups > 1)
+				ind.nGroups = 1;
 			extract_by_index(Sig, ind, base, false);
+		}
 		*psigBase = &Sig;
 	}
 	else if (ptree->type == N_TIME_EXTRACT)
@@ -1366,6 +1433,35 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 		Sig = base;
 		Sig.Crop(timepoints);
 		*psigBase = &Sig;
+	}
+	else if (ptree->type == N_CELL)
+	{
+		if (!*psigBase)
+			throw exception_etc(*this, ptree, "Brace selection requires a receiver.").raise();
+		AuxScope selectorScope(this);
+		CVar selector = *selectorScope.Compute(ptree->child);
+		if (!ISSCALARG(selector.type()) || !std::isfinite(selector.value()) ||
+			selector.value() < 1. || std::floor(selector.value()) != selector.value() ||
+			selector.value() >= std::ldexp(1., std::numeric_limits<uint64_t>::digits))
+			throw exception_etc(*this, ptree, "Brace index must be a positive integer scalar.").raise();
+
+		CVar* receiver = *psigBase;
+		const uint64_t ordinal = (uint64_t)selector.value();
+		if (!receiver->cell.empty())
+		{
+			if (ordinal > receiver->cell.size())
+			{
+				out << "Cell index " << ordinal;
+				throw exception_range(*this, ptree, out.str(), "").raise();
+			}
+			*psigBase = &receiver->cell[(size_t)ordinal - 1];
+			Sig = **psigBase;
+		}
+		else
+		{
+			Sig = temporal_block_by_ordinal(*receiver, ordinal, ptree);
+			*psigBase = &Sig;
+		}
 	}
 	else if (ptree->type == T_REPLICA || ptree->type == T_ENDPOINT)
 	{
@@ -1446,25 +1542,7 @@ AstNode* AuxScope::read_node(CVar** psigBase, AstNode* ptree)
 		//if (pres->IsGO()) // the variable ptree->str is a GO
 		//	Sig = *(*psigBase = pgo = pres);
 		if (IsConditional(ptree)) return get_next_parsible_node(ptree);
-		if (ptree->alt && ptree->alt->type == N_CELL)
-			//either cellvar{2} or cellvar{2}(3). cellvar or cellvar(2) doesn't come here.
-			// i.e., ptree->alt->child should be non-NULL
-		{
-			sanitize_cell_node(ptree);
-			CVar* lobj = &Vars.find(ptree->str)->second;
-			if (lobj->cell.empty())
-			{
-				out << "A non-cell variable " << ptree->str << " cannot be accessed as a cell.";
-				throw exception_etc(*this, ptree, out.str()).raise();
-			}
-			*psigBase = (CVar*)get_cell_item(ptree, *lobj);
-			// x{n} ends here;  x{n}(ids) continues to the next parsible node
-				Sig = **psigBase;
-		}
-		else
-		{
-			Sig = *(*psigBase = pres);
-		}
+		Sig = *(*psigBase = pres);
 	}
 	return get_next_parsible_node(ptree);
 }
