@@ -15,8 +15,8 @@
 #include <algorithm>
 
 bool CSignal::overlap(const CSignal &sec)
-{
-	if (sec.grid().first > grid().second || sec.grid().second < grid().first)
+{ // Adjacent grids (no gap between them) count as overlapping, consistent with operator_prep
+	if (sec.grid().first > grid().second + 1 || sec.grid().second + 1 < grid().first)
 		return false;
 	return true;
 }
@@ -44,11 +44,6 @@ int CSignal::operator_prep(const CSignal& sec, uint64_t &idx4op1, uint64_t &idx4
 	}
 	UpdateBuffer((uint64_t)nSamples + count2add, offset2copy);
 	nGroups = sec.nGroups;
-	if (i1 == 0 && i2 == 0 && f2 == 0)
-	{
-		auxtype val = buf[0];
-		for_each(buf + 1, buf + nSamples, [val](auxtype &v) { v = val; });
-	}
 	if (i2 < i1)
 	{
 		memcpy(buf, sec.buf, (uint64_t)(i1 - i2)*bufBlockSize);
@@ -106,12 +101,15 @@ void CTimeSeries::sort_by_tmark()
 	}
 }
 
-bool CSignal::operate(const CSignal& sec, char op)
+bool CSignal::operate(const CSignal& sec, char op, bool segmentwise)
 {
 	// Exception handling is yet to be done 3/8/2019
 	// If fs for one is 1 and for the other is >3 (such as 44100)
 	// make fs for this the big number
-	if (IsScalar() && sec.IsScalar() && !IsComplex() && !sec.IsComplex() &&
+	// segmentwise: sec is one segment of a chained operand. A one-sample audio segment
+	// is then a single point in time, not a scalar to broadcast over all of *this.
+	const bool secIsPoint = segmentwise && sec.IsScalar() && sec.fs > 1 && !sec.snap;
+	if (!secIsPoint && IsScalar() && sec.IsScalar() && !IsComplex() && !sec.IsComplex() &&
 		(IsLogical() || sec.IsLogical()))
 	{
 		const auxtype lhs = value();
@@ -186,7 +184,7 @@ bool CSignal::operate(const CSignal& sec, char op)
 		secReal.SetReal();
 		psec = &secReal;
 	}
-	if (psec->IsScalar())
+	if (psec->IsScalar() && !secIsPoint)
 	{
 		if (psec->IsComplex())
 		{
@@ -313,7 +311,7 @@ bool CTimeSeries::operate(const CTimeSeries& sec, char op)
 		bool checker = true;
 		for (CTimeSeries *p = this; p && it_chain != sec_chains.end(); p = p->chain)
 		{
-			if (p->CSignal::operate(**it_chain, op))
+			if (p->CSignal::operate(**it_chain, op, true))
 			{
 				checker &= false;
 				it_chain = sec_chains.erase(it_chain);
@@ -328,7 +326,7 @@ bool CTimeSeries::operate(const CTimeSeries& sec, char op)
 	for (auto q : sec_chains)
 		if (q->nSamples > 0 || q->chain)
 			AddChain(*q);
-	// Unite overlapping chains
+	// Unite overlapping or adjacent chains
 	for (CTimeSeries *q = this; q; /*q = q->chain; -->shouldn't be here because p can be removed from the chain*/)
 	{
 		bool autoupdate = true;
@@ -336,7 +334,7 @@ bool CTimeSeries::operate(const CTimeSeries& sec, char op)
 		{
 			if (q->overlap(*(p->chain)))
 			{
-				q->CSignal::operate(*(p->chain), op);
+				q->CSignal::operate(*(p->chain), op, true);
 				p->chain = p->chain->chain; //			remove p from the chain
 				autoupdate = false;
 			}

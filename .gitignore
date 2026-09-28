@@ -27,3 +27,11 @@ Release
 # OS
 .DS_Store
 Thumbs.db
+
+# Local runtime state and outputs
+aux2.history
+auxenv.json
+*.wav
+
+# Claude Code
+.claude/

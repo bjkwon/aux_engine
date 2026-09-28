@@ -545,7 +545,7 @@ vector<CVar> AuxScope::make_check_args(const AstNode* pnode, multimap<string, Cf
 	for (; ftlist != pEnv->builtin.end() && (*ftlist).first == fname; ftlist++)
 		if ((*ftlist).second.allowed_arg_types.empty() && !pnode->alt && !pnode->child) 
 			return out;
-	ftlist = pEnv->builtin.find(fname);
+	ftlist = pEnv->builtin.lower_bound(fname); // first gate of fname; multimap::find may return any of them
 	Cfunction func = (*ftlist).second;
 	if (func.alwaysstatic && struct_call)
 	{
@@ -618,7 +618,7 @@ void AuxScope::HandleAuxFunction(const AstNode *pnode)
 {
 	string fnsigs;
 	string fname = pnode->str;
-	multimap<string, Cfunction>::iterator ftlist = pEnv->builtin.find(fname);
+	multimap<string, Cfunction>::iterator ftlist = pEnv->builtin.lower_bound(fname);
 	bool structCall = pnode->type == N_STRUCT;
 	const AstNode* arg0 = arg0node(pnode, node);
 	if (!structCall)

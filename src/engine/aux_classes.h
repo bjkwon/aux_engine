@@ -360,7 +360,7 @@ protected:
 	function<auxtype(auxtype)> op2(auxtype me) { return [me](auxtype you) {return me - you; }; };
 	function<auxtype(auxtype)> op3(auxtype me) { return [me](auxtype you) {return me * you; }; };
 	function<auxtype(auxtype)> op4(auxtype me) { return [me](auxtype you) {return me / you; }; };
-	bool operate(const CSignal & sec, char op);
+	bool operate(const CSignal & sec, char op, bool segmentwise = false);
 
 private:
 	int operator_prep(const CSignal & sec, uint64_t &idx4op1, uint64_t &idx4op2, uint64_t &offset);

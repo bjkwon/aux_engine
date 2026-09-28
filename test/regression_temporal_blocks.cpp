@@ -174,6 +174,36 @@ static bool case_errors_and_read_only(std::string& err) {
          eval_error(s, "x.blockat(.25s)=dc(.05s)", "read-only", err);
 }
 
+static bool case_adjacent_chains_dissolve(std::string& err) {
+  Session s;
+  if (!s.ctx) { err = "aux_init failed"; return false; }
+  // x(x>0) and x(x<=0) tile the timeline with interleaved, gap-free blocks; x(x<=0)
+  // begins with a one-sample block at t=0.
+  if (!eval_ok(s,
+      "x=tone(20,1s).ramp(50),"
+      "y=x(x>0)*x(x>0)-x(x<=0)*x(x<=0),"
+      "z=x(x<=0)*x(x<=0)-x(x>0)*x(x>0),"
+      "w=x(x>0)+x(x<=0),"
+      "x1=x+1,d=x+x1(x<=0)-x", err)) return false;
+  if (!(mono_segment_equals(s, "y", 1000, 0., 1000, err) &&
+        mono_segment_equals(s, "z", 1000, 0., 1000, err) &&
+        mono_segment_equals(s, "w", 1000, 0., 1000, err) &&
+        mono_segment_equals(s, "d", 1000, 0., 1000, err))) return false;
+
+  // The one-sample block at t=0 applies only at t=0, not across the overlapping block.
+  AuxSignal segment{};
+  if (!aux_get_segment(aux_get_var(s.ctx, "d"), 0, 0, segment) || !segment.buf) {
+    err = "could not read d";
+    return false;
+  }
+  if (std::fabs(segment.buf[0] - 1.) > 1e-12 || std::fabs(segment.buf[1]) > 1e-12) {
+    err = "d(1)=" + std::to_string(segment.buf[0]) + ", d(2)=" + std::to_string(segment.buf[1]) +
+          "; expected 1 and 0";
+    return false;
+  }
+  return true;
+}
+
 static bool case_overlapping_blocks(std::string& err) {
   EngineRuntime runtime(1000);
   AuxScope scope(&runtime);
@@ -220,6 +250,7 @@ int main() {
     {"blockat_and_channels", case_blockat_and_channels},
     {"errors_and_read_only", case_errors_and_read_only},
     {"overlapping_blocks", case_overlapping_blocks},
+    {"adjacent_chains_dissolve", case_adjacent_chains_dissolve},
   };
 
   bool ok = true;

@@ -1,0 +1,16 @@
+09/29/11:19AM
+
+- Document face() in the user's doc.
+  face() is not described anywhere in the docs yet. Cover both forms:
+    face(obj, value) / obj.face(value)  -- setter: stores value as the face
+      (the plain value held alongside cell elements / struct members) of a
+      named cell or struct variable; the elements/members are kept.
+      Returns value.
+    face(obj) / obj.face                -- getter: returns the face of obj
+      with its cell/struct contents stripped.
+  Example:
+    a={x}
+    face(a,5)   % a{1} is still x
+    face(a)     % -> 5
+  Implementation: _cellstruct / _structbase in src/func/cell_func.cpp,
+  registered in src/engine/AuxFunc.cpp.
