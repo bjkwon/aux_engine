@@ -395,7 +395,7 @@ private:
 	void eval_index(const AstNode* pInd, const CVar& varLHS, CVar& index, bool* firstIndexWasLogical = NULL, CVar* logicalSelector = NULL);
 	void insertreplace(const AstNode* pnode, const CVar& sec, const CVar& indsig, CVar* lobj, bool isreplica);
 	const CVar* get_cell_item(const AstNode* plhs, const CVar& cellobj);
-	void adjust_buf(CSignals& lobj, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn);
+	void adjust_buf(body& lobj, const body& lhs_index, const body& robj, bool contig, const AstNode* pn);
 	void assign_struct(CVar* lobj, const AstNode* plhs, const AstNode* pstruct, const CVar& robj);
 	CVar* get_available_struct_item(const AstNode* plhs, const AstNode** pstruct);
 	void sanitize_cell_node(const AstNode* p);

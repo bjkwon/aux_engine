@@ -227,6 +227,37 @@ static bool expect_described_size(Session& s, const std::string& varName, const 
   return true;
 }
 
+static bool expect_audio_segment(Session& s, const std::string& varName, int channel, int segment,
+                                 uint64_t expectedSamples, int expectedFs, double expectedTmark,
+                                 const std::vector<std::pair<size_t, double>>& expectedValues,
+                                 double tol = 1e-9) {
+  AuxObj obj = aux_get_var(s.ctx, varName);
+  if (!obj) {
+    s.err = "Variable not found: " + varName;
+    return false;
+  }
+  AuxSignal sig{};
+  if (!aux_get_segment(obj, channel, segment, sig)) {
+    s.err = "Could not get segment " + std::to_string(segment) + " of " + varName;
+    return false;
+  }
+  if (sig.nSamples != expectedSamples || sig.fs != expectedFs ||
+      std::fabs(sig.tmark - expectedTmark) > tol) {
+    s.err = "Unexpected metadata for " + varName + " channel " + std::to_string(channel) +
+            " segment " + std::to_string(segment) + ": samples=" + std::to_string(sig.nSamples) +
+            ", fs=" + std::to_string(sig.fs) + ", tmark=" + std::to_string(sig.tmark);
+    return false;
+  }
+  for (const auto& expected : expectedValues) {
+    if (expected.first >= sig.nSamples || std::fabs(sig.buf[expected.first] - expected.second) > tol) {
+      s.err = "Unexpected sample for " + varName + " channel " + std::to_string(channel) +
+              " segment " + std::to_string(segment) + " at " + std::to_string(expected.first);
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool case_empty_index_read_returns_null(std::string& err) {
   Session s("case_empty_index_read_returns_null");
   if (!s.ok()) { err = s.err; return false; }
@@ -341,6 +372,124 @@ static bool case_audio_logical_index_preserves_true_run_timing(std::string& err)
             ", end=" + std::to_string(actualEnd);
       return false;
     }
+  }
+  return true;
+}
+
+static bool case_boolean_selector_prefix_contract(std::string& err) {
+  Session s("case_boolean_selector_prefix_contract");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=1:5; short=[true false true]; long=[true false true false false true]",
+                      "Boolean selector setup") ||
+      !expect_eval_error(s, "bad=x(short)", "short Boolean selector read") ||
+      !expect_eval_error(s, "x(short)=7", "short Boolean selector write") ||
+      !expect_eval_ok(s, "picked=x(long)", "long Boolean selector read") ||
+      !expect_vector_values(s, "picked", {1, 3}) ||
+      !expect_eval_ok(s, "x(long)=[10 30]", "long Boolean selector write by true count") ||
+      !expect_vector_values(s, "x", {10, 2, 30, 4, 5}) ||
+      !expect_eval_error(s, "x(long)=1:6", "Boolean assignment using full selector length") ||
+      !expect_eval_error(s, "x(true)=7", "scalar Boolean selector") ||
+      !expect_eval_ok(s, "k=1:10; z=[2 1 0 9 3]; even=z(k%2==0)",
+                      "long expression-derived Boolean selector") ||
+      !expect_vector_values(s, "even", {1, 9})) {
+    err = s.err;
+    return false;
+  }
+
+  if (!expect_eval_ok(s, "sigx=dc(5); longer=dc(10); audioPicked=sigx(longer>0)",
+                      "longer audio-derived Boolean selector")) {
+    err = s.err;
+    return false;
+  }
+  AuxObj audioPicked = aux_get_var(s.ctx, "audioPicked");
+  if (!audioPicked || !aux_is_audio(audioPicked) || aux_num_segments(audioPicked, 0) != 1 ||
+      !expect_audio_segment(s, "audioPicked", 0, 0, 110, s.cfg.sample_rate, 0.0, {{0, 1.0}, {109, 1.0}})) {
+    err = s.err.empty() ? "A longer audio condition should be truncated to the indexed audio length." : s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_array_arithmetic_shape_rules(std::string& err) {
+  Session s("case_array_arithmetic_shape_rules");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_error(s, "bad=[1 2 3]+[10 20]", "unequal vector addition") ||
+      !expect_eval_ok(s, "a=[1 2 3;4 5 6]; col=[10;-6]", "matrix and column setup") ||
+      !expect_eval_ok(s, "sum1=a+col; sum2=col+a", "column-vector row broadcasting") ||
+      !expect_matrix_preview_values(s, "sum1", "2x3", {11, 12, 13, -2, -1, 0}) ||
+      !expect_matrix_preview_values(s, "sum2", "2x3", {11, 12, 13, -2, -1, 0}) ||
+      !expect_eval_error(s, "bad=a+[1 2;3 4]", "2x3 plus 2x2")) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_audio_sample_index_preserves_type_and_stereo(std::string& err) {
+  Session s("case_audio_sample_index_preserves_type_and_stereo");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=dc(10); mono=x(41:50); stereo=[x;x]; picked=stereo(41:50)",
+                      "contiguous audio sample indexing")) {
+    err = s.err;
+    return false;
+  }
+  AuxObj mono = aux_get_var(s.ctx, "mono");
+  AuxObj picked = aux_get_var(s.ctx, "picked");
+  if (!mono || !aux_is_audio(mono) || aux_num_channels(mono) != 1 || aux_num_segments(mono, 0) != 1 ||
+      !picked || !aux_is_audio(picked) || aux_num_channels(picked) != 2 ||
+      aux_num_segments(picked, 0) != 1 || aux_num_segments(picked, 1) != 1) {
+    err = "Contiguous sample indexing should preserve mono/stereo audio type.";
+    return false;
+  }
+  const double expectedTmark = 40.0 * 1000.0 / s.cfg.sample_rate;
+  if (!expect_audio_segment(s, "mono", 0, 0, 10, s.cfg.sample_rate, expectedTmark, {{0, 1.0}}, 1e-6) ||
+      !expect_audio_segment(s, "picked", 0, 0, 10, s.cfg.sample_rate, expectedTmark, {{0, 1.0}}, 1e-6) ||
+      !expect_audio_segment(s, "picked", 1, 0, 10, s.cfg.sample_rate, expectedTmark, {{0, 1.0}}, 1e-6)) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_chained_audio_sample_index_applies_per_block(std::string& err) {
+  Session s("case_chained_audio_sample_index_applies_per_block");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=dc(10)+dc(8)>>20; picked=x(1:5)", "chained sample-index read")) {
+    err = s.err;
+    return false;
+  }
+  AuxObj picked = aux_get_var(s.ctx, "picked");
+  if (!picked || !aux_is_audio(picked) || aux_num_segments(picked, 0) != 2 ||
+      !expect_audio_segment(s, "picked", 0, 0, 5, s.cfg.sample_rate, 0.0, {{0, 1.0}, {4, 1.0}}) ||
+      !expect_audio_segment(s, "picked", 0, 1, 5, s.cfg.sample_rate, 20.0, {{0, 1.0}, {4, 1.0}}) ||
+      !expect_eval_ok(s, "x(1:5)=2", "chained sample-index write") ||
+      !expect_audio_segment(s, "x", 0, 0, 221, s.cfg.sample_rate, 0.0, {{0, 2.0}, {4, 2.0}, {5, 1.0}}) ||
+      !expect_audio_segment(s, "x", 0, 1, 176, s.cfg.sample_rate, 20.0, {{0, 2.0}, {4, 2.0}, {5, 1.0}})) {
+    err = s.err;
+    return false;
+  }
+
+  if (!expect_eval_ok(s, "z=dc(10)+dc(0.1)>>20", "short chained-block setup") ||
+      !expect_eval_error(s, "z(1:5)=2", "index invalid in a later chained block") ||
+      !expect_audio_segment(s, "z", 0, 0, 221, s.cfg.sample_rate, 0.0, {{0, 1.0}, {4, 1.0}})) {
+    err = s.err;
+    return false;
+  }
+  return true;
+}
+
+static bool case_scalar_time_write_fills_without_metadata_damage(std::string& err) {
+  Session s("case_scalar_time_write_fills_without_metadata_damage");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!expect_eval_ok(s, "x=dc(10); x(2~6)=3", "scalar time-range fill") ||
+      !expect_audio_segment(s, "x", 0, 0, 221, s.cfg.sample_rate, 0.0,
+                            {{0, 1.0}, {44, 1.0}, {45, 3.0}, {132, 3.0}, {133, 1.0}}) ||
+      !expect_eval_ok(s, "c=dc(10)+dc(10)>>20; c(22~26)=3", "later chained scalar time-range fill") ||
+      !expect_audio_segment(s, "c", 0, 0, 221, s.cfg.sample_rate, 0.0, {{0, 1.0}, {220, 1.0}}) ||
+      !expect_audio_segment(s, "c", 0, 1, 221, s.cfg.sample_rate, 20.0,
+                            {{0, 1.0}, {44, 1.0}, {45, 3.0}, {132, 3.0}, {133, 1.0}})) {
+    err = s.err;
+    return false;
   }
   return true;
 }
@@ -641,9 +790,15 @@ static bool case_channel_selector_read_then_index(std::string& err) {
   if (!s.ok()) { err = s.err; return false; }
   if (!expect_eval_ok(s, "x=[silence(1000); silence(1000)]", "stereo silence setup") ||
       !expect_eval_ok(s, "x.left(1:5)=0.5", "x.left(1:5)=0.5") ||
-      !expect_eval_ok(s, "b=x.left(1:5)", "b=x.left(1:5)") ||
-      !expect_vector_values(s, "b", {0.5, 0.5, 0.5, 0.5, 0.5})) {
+      !expect_eval_ok(s, "b=x.left(1:5)", "b=x.left(1:5)")) {
     err = s.err;
+    return false;
+  }
+  AuxObj b = aux_get_var(s.ctx, "b");
+  if (!b || !aux_is_audio(b) || aux_num_channels(b) != 1 ||
+      !expect_audio_segment(s, "b", 0, 0, 5, s.cfg.sample_rate, 0.0,
+                            {{0, 0.5}, {1, 0.5}, {2, 0.5}, {3, 0.5}, {4, 0.5}})) {
+    err = s.err.empty() ? "x.left(1:5) should be mono audio." : s.err;
     return false;
   }
   return true;
@@ -1223,6 +1378,11 @@ int main() {
     {"case_ungroup_overlap_reverses_group_overlap", case_ungroup_overlap_reverses_group_overlap},
     {"case_logical_index_flattens_grouped_read_but_not_write", case_logical_index_flattens_grouped_read_but_not_write},
     {"case_audio_logical_index_preserves_true_run_timing", case_audio_logical_index_preserves_true_run_timing},
+    {"case_boolean_selector_prefix_contract", case_boolean_selector_prefix_contract},
+    {"case_array_arithmetic_shape_rules", case_array_arithmetic_shape_rules},
+    {"case_audio_sample_index_preserves_type_and_stereo", case_audio_sample_index_preserves_type_and_stereo},
+    {"case_chained_audio_sample_index_applies_per_block", case_chained_audio_sample_index_applies_per_block},
+    {"case_scalar_time_write_fills_without_metadata_damage", case_scalar_time_write_fills_without_metadata_damage},
     {"case_empty_index_write_null_is_noop", case_empty_index_write_null_is_noop},
     {"case_empty_index_write_nonnull_is_error", case_empty_index_write_nonnull_is_error},
     {"case_end_index_on_empty_lhs_is_error", case_end_index_on_empty_lhs_is_error},

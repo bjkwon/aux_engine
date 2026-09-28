@@ -126,6 +126,55 @@ bool CSignal::operate(const CSignal& sec, char op)
 			SetValue(lhs / rhs);
 		return true;
 	}
+	// Plain arrays use shape-based arithmetic rather than the timeline-overlap
+	// behavior used by temporal objects.  Apart from scalars and empty arrays,
+	// vectors must have equal lengths and matrices must have equal dimensions.
+	// A column vector is the one additional matrix case: its value on each row
+	// is broadcast across that row of the other operand.
+	if (fs == 1 && sec.fs == 1 && nSamples > 1 && sec.nSamples > 1)
+	{
+		const uint64_t lhsRows = nGroups;
+		const uint64_t rhsRows = sec.nGroups;
+		const uint64_t lhsCols = Len();
+		const uint64_t rhsCols = sec.Len();
+
+		if (lhsRows != rhsRows)
+			throw "Array dimensions must agree.";
+
+		if (lhsCols != rhsCols)
+		{
+			if (lhsRows == 1 || (lhsCols != 1 && rhsCols != 1))
+				throw "Array dimensions must agree.";
+
+			if (rhsCols == 1)
+			{
+				CSignal expanded(sec.fs);
+				expanded.bufType = sec.bufType;
+				expanded.bufBlockSize = sec.bufBlockSize;
+				expanded.UpdateBuffer(nSamples);
+				expanded.nGroups = lhsRows;
+				for (uint64_t row = 0; row < lhsRows; ++row)
+					for (uint64_t col = 0; col < lhsCols; ++col)
+						memcpy(expanded.logbuf + (row * lhsCols + col) * expanded.bufBlockSize,
+						       sec.logbuf + row * sec.bufBlockSize,
+						       expanded.bufBlockSize);
+				return operate(expanded, op);
+			}
+
+			CSignal column(*this);
+			CSignal expanded(fs);
+			expanded.bufType = bufType;
+			expanded.bufBlockSize = bufBlockSize;
+			expanded.UpdateBuffer(sec.nSamples);
+			expanded.nGroups = rhsRows;
+			for (uint64_t row = 0; row < rhsRows; ++row)
+				for (uint64_t col = 0; col < rhsCols; ++col)
+					memcpy(expanded.logbuf + (row * rhsCols + col) * expanded.bufBlockSize,
+					       column.logbuf + row * column.bufBlockSize,
+					       expanded.bufBlockSize);
+			*this = expanded;
+		}
+	}
 	if (fs == 1 && sec.fs > 3) fs = sec.fs;
 	CSignal secReal;
 	const CSignal* psec = &sec;

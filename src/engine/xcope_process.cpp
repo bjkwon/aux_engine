@@ -210,6 +210,19 @@ bool AuxScope::get_nodes_left_right_sides(const AstNode* pnode, const AstNode** 
 	return searchtree(*prhs, T_REPLICA) != NULL;
 }
 
+static void copy_index_prefix(CTimeSeries& destination, const CTimeSeries& source, uint64_t length)
+{
+	destination.Reset(source.GetFs());
+	destination.bufType = source.bufType;
+	destination.bufBlockSize = source.bufBlockSize;
+	destination.UpdateBuffer(length);
+	destination.nGroups = source.nGroups;
+	destination.tmark = source.tmark;
+	destination.snap = source.snap;
+	if (length > 0)
+		memcpy(destination.logbuf, source.logbuf, length * source.bufBlockSize);
+}
+
 void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index, bool* firstIndexWasLogical, CVar* logicalSelector)
 {
 	// input: pInd, psigBase
@@ -234,6 +247,36 @@ void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index, 
 			index = Compute(pInd);
 		if (index.IsLogical())
 		{
+			if (index.nSamples == 1 && !index.chain)
+				throw exception_etc(*this, pInd, "A scalar Boolean value cannot be used as an index.").raise();
+
+			CVar normalized;
+			const bool perBlockSelector = index.chain != NULL;
+			const CTimeSeries* sourcePart = &index;
+			const CTimeSeries* targetPart = &varLHS;
+			CTimeSeries* normalizedPart = &normalized;
+			while (targetPart)
+			{
+				if (!sourcePart)
+					throw exception_etc(*this, pInd, "Boolean selector chain does not match the indexed object.").raise();
+				const uint64_t requiredLength = pInd->next ? varLHS.nGroups : targetPart->nSamples;
+				if (sourcePart->nSamples < requiredLength)
+					throw exception_etc(*this, pInd,
+						"Boolean selector must contain at least as many entries as the indexed object.").raise();
+
+				copy_index_prefix(*normalizedPart, *sourcePart, requiredLength);
+				targetPart = pInd->next ? NULL : targetPart->chain;
+				if (perBlockSelector)
+					sourcePart = sourcePart->chain;
+				if (targetPart)
+				{
+					normalizedPart->chain = new CTimeSeries;
+					normalizedPart = normalizedPart->chain;
+				}
+			}
+			if (perBlockSelector && sourcePart)
+				throw exception_etc(*this, pInd, "Boolean selector chain does not match the indexed object.").raise();
+			index = normalized;
 			if (firstIndexWasLogical)
 				*firstIndexWasLogical = true;
 			if (logicalSelector)
@@ -260,7 +303,20 @@ void AuxScope::eval_index(const AstNode* pInd, const CVar &varLHS, CVar &index, 
 				isig2 = Compute(p);
 				ends.pop_back(); // pop 2-D end value from the stack here
 			}
-			if (isig2.IsLogical()) index_array_satisfying_condition(isig2);
+			if (isig2.IsLogical())
+			{
+				if (isig2.nSamples == 1 && !isig2.chain)
+					throw exception_etc(*this, p, "A scalar Boolean value cannot be used as an index.").raise();
+				if (isig2.chain)
+					throw exception_etc(*this, p, "A matrix-dimension Boolean selector cannot be chained.").raise();
+				if (isig2.nSamples < varLHS.Len())
+					throw exception_etc(*this, p,
+						"Boolean selector must contain at least as many entries as the indexed dimension.").raise();
+				CVar normalizedSecond;
+				copy_index_prefix(normalizedSecond, isig2, varLHS.Len());
+				isig2 = normalizedSecond;
+				index_array_satisfying_condition(isig2);
+			}
 			if (isig2.nSamples > 0 && isig2._max() > (double)varLHS.Len())
 			{
 				oss << "max of 2nd index " << isig2._max() << " exceeds" << varLHS.Len() << ".";
@@ -432,7 +488,11 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
             // type() carries TYPEBIT_MULTICHANS even though only one channel is being written.
             if (channelWriteSel)
                 typeMask &= (uint16_t)~TYPEBIT_MULTICHANS;
-            if (typerhs > 0 && plhs->alt->type != N_STRUCT && (typelhs & typeMask) != (typerhs & typeMask)) {
+            const bool scalarTimeFill = plhs->alt->type == N_TIME_EXTRACT &&
+                                        RHS.nSamples == 1 && !RHS.chain &&
+                                        RHS.bufBlockSize == pvarLHS->bufBlockSize;
+            if (typerhs > 0 && plhs->alt->type != N_STRUCT && !scalarTimeFill &&
+                (typelhs & typeMask) != (typerhs & typeMask)) {
                 if (!ISAUDIO(typelhs) || !ISAUDIO(typerhs)) // if one is single chain audio and the other is chained audio, it should't throw
                     throw exception_etc(*this, plhs, "LHS and RHS have different object type.").raise();
             }
@@ -451,6 +511,24 @@ void AuxScope::eval_lhs(const AstNode* plhs, const AstNode* prhs, CVar &lhs_inde
 		}
 		// x(ind): process ind
 		eval_index(plhs->alt->child, *pvarLHS, lhs_index);
+		if (pvarLHS->chain)
+		{
+			const bool perBlockIndex = lhs_index.chain != NULL;
+			const CTimeSeries* sourcePart = pvarLHS;
+			const CTimeSeries* indexPart = &lhs_index;
+			for (; sourcePart; sourcePart = sourcePart->chain)
+			{
+				if (!indexPart)
+					throw exception_etc(*this, plhs, "Index chain does not match the source chain.").raise();
+				if (indexPart->nSamples > 0 &&
+					(indexPart->_max() > sourcePart->nSamples || indexPart->_min() < 1))
+					throw exception_range(*this, plhs, "Index exceeds at least one chained block.", "").raise();
+				if (perBlockIndex)
+					indexPart = indexPart->chain;
+			}
+			if (perBlockIndex && indexPart)
+				throw exception_etc(*this, plhs, "Index chain does not match the source chain.").raise();
+		}
 		if (lhs_index.nSamples == 0)
 			return;
 		//check size
@@ -542,7 +620,7 @@ CVar* AuxScope::get_available_struct_item(const AstNode* plhs, const AstNode** p
 /* contig: true if a contiguous buffer block is represented by lhs_index
 /* pn: pointer to AstNode, only used for exception handling
 */
-void AuxScope::adjust_buf(CSignals& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* pn)
+void AuxScope::adjust_buf(body& lvar, const body& lhs_index, const body& robj, bool contig, const AstNode* pn)
 {
 	const size_t elemSize = lvar.bufBlockSize;
 	if (robj.nSamples == 0)
@@ -556,12 +634,19 @@ void AuxScope::adjust_buf(CSignals& lvar, const CVar& lhs_index, const CVar& rob
 		}
 		else
 		{
-			for (uint64_t k = 0; k < lhs_index.nSamples; k++) {
-				memmove(lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[k] - 1),
-				        lvar.logbuf + elemSize * ((uint64_t)lhs_index.buf[k]),
-				        (lvar.nSamples - (uint64_t)lhs_index.buf[k]) * elemSize);
+			vector<uint64_t> positions;
+			positions.reserve(lhs_index.nSamples);
+			for (uint64_t k = 0; k < lhs_index.nSamples; ++k)
+				positions.push_back((uint64_t)lhs_index.buf[k] - 1);
+			sort(positions.begin(), positions.end());
+			positions.erase(unique(positions.begin(), positions.end()), positions.end());
+			for (auto it = positions.rbegin(); it != positions.rend(); ++it)
+			{
+				const uint64_t pos = *it;
+				memmove(lvar.logbuf + elemSize * pos,
+				        lvar.logbuf + elemSize * (pos + 1),
+				        (lvar.nSamples - pos - 1) * elemSize);
 				--lvar.nSamples;
-				for (uint64_t p = k; p < lhs_index.nSamples; p++) lhs_index.buf[p]--;
 			}
 		}
 	}
@@ -593,42 +678,89 @@ void AuxScope::adjust_buf(CSignals& lvar, const CVar& lhs_index, const CVar& rob
 		throw exception_etc(*this, pn, "Unexpected case").raise();
 }
 
-void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, bool contig)
+static bool is_contiguous_increasing_index(const body& index)
 {
-	// Clear
-	out.Reset();
-	out.bufType = obj.bufType;
-	out.bufBlockSize = obj.bufBlockSize;
-	//allocate the output buffer
+	for (uint64_t k = 1; k < index.nSamples; ++k)
+		if (index.buf[k - 1] + 1. != index.buf[k])
+			return false;
+	return true;
+}
+
+static void extract_indexed_block(CTimeSeries& out, const body& index,
+	const CTimeSeries& source, bool preserveAudio, bool preserveTimeline)
+
+{
+	out.Reset(preserveAudio ? source.GetFs() : 1);
+	out.bufType = source.bufType;
+	out.bufBlockSize = source.bufBlockSize;
 	out.UpdateBuffer(index.nSamples);
-	const size_t firstOffset = (size_t)(out.bufBlockSize * ((uint64_t)index.buf[0] - 1));
-	if (contig)
+	out.nGroups = index.nGroups;
+	out.snap = source.snap;
+	if (preserveAudio && index.nSamples > 0)
+		out.tmark = source.tmark + (index.buf[0] - 1.) * 1000. / source.GetFs();
+	else if (preserveTimeline)
+		out.tmark = source.tmark;
+
+	if (index.nSamples == 0)
+		return;
+	if (index._max() > source.nSamples || index._min() < 1)
+		throw "Index exceeds at least one chained block.";
+
+	const bool contiguous = is_contiguous_increasing_index(index);
+	const size_t firstOffset = source.bufBlockSize * ((uint64_t)index.buf[0] - 1);
+	if (contiguous)
 	{
-		memmove(out.logbuf, obj.logbuf + firstOffset, out.bufBlockSize * index.nSamples);
+		memmove(out.logbuf, source.logbuf + firstOffset, source.bufBlockSize * index.nSamples);
 	}
 	else
 	{
 		for (uint64_t k = 0; k < index.nSamples; k++)
 		{
-			const size_t srcOffset = (size_t)(obj.bufBlockSize * ((uint64_t)index.buf[k] - 1));
-			memcpy(out.logbuf + k * out.bufBlockSize, obj.logbuf + srcOffset, out.bufBlockSize);
+			const size_t srcOffset = source.bufBlockSize * ((uint64_t)index.buf[k] - 1);
+			memcpy(out.logbuf + k * out.bufBlockSize, source.logbuf + srcOffset, out.bufBlockSize);
 		}
 	}
-	out.nGroups = index.nGroups;
-	if (obj.next) {
-		CSignals sec;
-		sec.bufType = obj.next->bufType;
-		sec.bufBlockSize = obj.next->bufBlockSize;
-		sec.UpdateBuffer(index.nSamples);
-		if (contig)
-			memmove(sec.logbuf, obj.next->logbuf + firstOffset, sec.bufBlockSize * index.nSamples);
-		else
-			for (uint64_t k = 0; k < index.nSamples; k++)
-			{
-				const size_t srcOffset = (size_t)(sec.bufBlockSize * ((uint64_t)index.buf[k] - 1));
-				memcpy(sec.logbuf + k * sec.bufBlockSize, obj.next->logbuf + srcOffset, sec.bufBlockSize);
-			}
-		out.SetNextChan(sec);
+
+}
+
+static void extract_indexed_channel(CTimeSeries& out, const CVar& index,
+	const CTimeSeries& source, bool preserveAudio)
+{
+	const bool perBlockIndex = index.chain != NULL;
+	const bool preserveTimeline = source.chain != NULL;
+	const CTimeSeries* sourcePart = &source;
+	const CTimeSeries* indexPart = &index;
+	CTimeSeries* outPart = &out;
+	while (sourcePart)
+	{
+		if (!indexPart)
+			throw "Index chain does not match the source chain.";
+		extract_indexed_block(*outPart, *indexPart, *sourcePart,
+			preserveAudio && is_contiguous_increasing_index(*indexPart), preserveTimeline);
+		sourcePart = sourcePart->chain;
+		if (perBlockIndex)
+			indexPart = indexPart->chain;
+		if (sourcePart)
+		{
+			outPart->chain = new CTimeSeries;
+			outPart = outPart->chain;
+		}
+	}
+	if (perBlockIndex && indexPart)
+		throw "Index chain does not match the source chain.";
+
+}
+
+void AuxScope::extract_by_index(CVar& out, const CVar& index, const CVar& obj, bool contig)
+{
+	(void)contig;
+	out.Reset();
+	extract_indexed_channel(out, index, obj, ISAUDIO(obj.type()));
+	if (obj.next)
+	{
+		CSignals right;
+		extract_indexed_channel(right, index, *obj.next, ISAUDIO(obj.type()));
+		out.SetNextChan(right);
 	}
 }
 
@@ -711,6 +843,33 @@ bool AuxScope::extract_audio_by_logical_condition(CVar& out, const CVar& selecto
 	return true;
 }
 
+static bool fill_time_range_with_scalar(CTimeSeries& signal, double beginMs, double endMs, const body& scalar)
+{
+	if (beginMs > endMs)
+		swap(beginMs, endMs);
+	bool wrote = false;
+	for (CTimeSeries* part = &signal; part; part = part->chain)
+	{
+		if (part->GetFs() <= 0 || part->nSamples == 0)
+			continue;
+		const double partBegin = part->tmark;
+		const double partEnd = partBegin + part->nSamples * 1000. / part->GetFs();
+		const double overlapBegin = max(beginMs, partBegin);
+		const double overlapEnd = min(endMs, partEnd);
+		if (overlapBegin >= overlapEnd)
+			continue;
+		const double samplesPerMs = part->GetFs() / 1000.;
+		uint64_t first = (uint64_t)ceil((overlapBegin - partBegin) * samplesPerMs - 1.e-9);
+		uint64_t last = (uint64_t)ceil((overlapEnd - partBegin) * samplesPerMs - 1.e-9);
+		first = min(first, part->nSamples);
+		last = min(last, part->nSamples);
+		for (uint64_t k = first; k < last; ++k)
+			memcpy(part->logbuf + k * part->bufBlockSize, scalar.logbuf, part->bufBlockSize);
+		wrote |= first < last;
+	}
+	return wrote;
+}
+
 /* Assume that lvar is either a scalar, vector, audiosig, or tseq and has already been evaluated
 * lvar is being modified with robj according to lhs_index, which is either vector indices (1D or 2D) or time indices
 * (also assume that type checking of robj and lvar has been done)
@@ -718,6 +877,7 @@ bool AuxScope::extract_audio_by_logical_condition(CVar& out, const CVar& selecto
 */
 void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool contig, const AstNode* plhs, const AstNode* prhs)
 {
+	(void)contig;
 	bool isreplica = prhs != NULL;
 	if (lhs_index.nSamples == 0)
 	{
@@ -734,6 +894,23 @@ void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool
 	}
 	if (plhs->alt->type == N_TIME_EXTRACT)
 	{
+		if (!isreplica && robj.nSamples == 1 && !robj.chain)
+		{
+			const double beginMs = lhs_index.buf[0];
+			const double endMs = lhs_index.buf[1];
+			bool wrote = false;
+			if (channelWriteSel != 2)
+				wrote |= fill_time_range_with_scalar(lvar, beginMs, endMs, robj);
+			if (lvar.next && channelWriteSel != 1)
+			{
+				const body& rightScalar = robj.next ? static_cast<const body&>(*robj.next) : static_cast<const body&>(robj);
+				const CTimeSeries* rightIndex = lhs_index.next ? lhs_index.next : &lhs_index;
+				wrote |= fill_time_range_with_scalar(*lvar.next, rightIndex->buf[0], rightIndex->buf[1], rightScalar);
+			}
+			if (!wrote)
+				throw exception_etc(*this, plhs, "Time indexing out of range").raise();
+			return;
+		}
 		if (isreplica) { //RL-T
 			if (channelWriteSel == 2)
 				replica = *lvar.next;
@@ -749,24 +926,71 @@ void AuxScope::mod_sig(CVar& lvar, const CVar& lhs_index, const CVar& robj, bool
 	else
 	{
 		const AstNode* pn = plhs->alt;
-		if (isreplica) { //RL-X
-			CSignals& target = (channelWriteSel == 2) ? *lvar.next : lvar;
-			replica.UpdateBuffer(lhs_index.nSamples);
-			if (contig)
-				memmove(replica.logbuf, target.logbuf + (size_t)(target.bufBlockSize * (lhs_index.buf[0] - 1)), target.bufBlockSize * lhs_index.nSamples);
-			else
-				for (uint64_t k = 0; k < lhs_index.nSamples; k++)
-					replica.buf[k] = target.buf[(uint64_t)lhs_index.buf[k] - 1];
-			adjust_buf(target, lhs_index, Compute(prhs), contig, pn);
-			replica.Reset();
+		auto applyDirect = [&](CTimeSeries& target, const CTimeSeries& rhsRoot)
+		{
+			const bool perBlockIndex = lhs_index.chain != NULL;
+			const bool perBlockRhs = rhsRoot.chain != NULL;
+			CTimeSeries* targetPart = &target;
+			const CTimeSeries* indexPart = &lhs_index;
+			const CTimeSeries* rhsPart = &rhsRoot;
+			while (targetPart)
+			{
+				if (!indexPart || !rhsPart)
+					throw exception_etc(*this, plhs, "Indexed assignment chain dimensions do not agree.").raise();
+				if (rhsPart->nSamples > 1 && indexPart->nSamples > 1 &&
+					(indexPart->nSamples != rhsPart->nSamples || indexPart->nGroups != rhsPart->nGroups))
+					throw exception_etc(*this, plhs, "LHS and RHS have different dimension (lengths).").raise();
+				adjust_buf(*targetPart, *indexPart, *rhsPart,
+					is_contiguous_increasing_index(*indexPart), pn);
+				targetPart = targetPart->chain;
+				if (perBlockIndex) indexPart = indexPart->chain;
+				if (perBlockRhs) rhsPart = rhsPart->chain;
+			}
+			if ((perBlockIndex && indexPart) || (perBlockRhs && rhsPart))
+				throw exception_etc(*this, plhs, "Indexed assignment chain dimensions do not agree.").raise();
+		};
+
+		auto applyReplica = [&](CTimeSeries& target)
+		{
+			const bool perBlockIndex = lhs_index.chain != NULL;
+			CTimeSeries* targetPart = &target;
+			const CTimeSeries* indexPart = &lhs_index;
+			while (targetPart)
+			{
+				if (!indexPart)
+					throw exception_etc(*this, plhs, "Index chain does not match the source chain.").raise();
+				CVar sourceBlock;
+				sourceBlock.CTimeSeries::operator=(static_cast<const CSignal&>(*targetPart));
+				CVar indexBlock;
+				indexBlock.CTimeSeries::operator=(static_cast<const CSignal&>(*indexPart));
+				extract_by_index(replica, indexBlock, sourceBlock,
+					is_contiguous_increasing_index(*indexPart));
+				CVar computed = *Compute(prhs);
+				adjust_buf(*targetPart, *indexPart, computed,
+					is_contiguous_increasing_index(*indexPart), pn);
+				replica.Reset();
+				targetPart = targetPart->chain;
+				if (perBlockIndex) indexPart = indexPart->chain;
+			}
+			if (perBlockIndex && indexPart)
+				throw exception_etc(*this, plhs, "Index chain does not match the source chain.").raise();
+		};
+
+		if (isreplica)
+		{
+			if (channelWriteSel != 2)
+				applyReplica(lvar);
+			if (lvar.next && channelWriteSel != 1)
+				applyReplica(*lvar.next);
 		}
-		else if (channelWriteSel == 2)
-			// .right-scoped write: redirect to the real next-channel CSignals node directly (never
-			// reinterpreted as a CVar -- see get_available_struct_item), leaving lvar's own primary
-			// channel data untouched.
-			adjust_buf(*lvar.next, lhs_index, robj, contig, pn);
 		else
-			adjust_buf(lvar, lhs_index, robj, contig, pn);
+		{
+			if (channelWriteSel != 2)
+				applyDirect(lvar, robj);
+			if (lvar.next && channelWriteSel != 1)
+				applyDirect(*lvar.next, robj.next ? static_cast<const CTimeSeries&>(*robj.next)
+				                                  : static_cast<const CTimeSeries&>(robj));
+		}
 	}
 }
 
