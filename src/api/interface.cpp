@@ -1452,10 +1452,48 @@ AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname)
     }
     string estr;
     AstNode* t_func = frame->ReadUDF(estr, udfname);
-    if (t_func) 
+    if (t_func)
         return 0; // inspect t_func for other information.. keep it for later use
-    else 
+    else
         return 1;
+}
+
+static bool is_class_method_udf_key(const string& key)
+{
+    return key.rfind("__class__", 0) == 0;
+}
+
+map<string, string> aux_list_udfs(auxContext* ctx)
+{
+    map<string, string> out;
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return out;
+    }
+    for (const auto& entry : frame->pEnv->udf) {
+        if (!is_class_method_udf_key(entry.first))
+            out[entry.first] = entry.second.fullname;
+    }
+    return out;
+}
+
+int aux_forget_udf(auxContext* ctx, const string& udfname)
+{
+    AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
+    if (!ctx || !frame->pEnv) {
+        return -1;
+    }
+    string key = udfname;
+    transform(key.begin(), key.end(), key.begin(), ::tolower);
+    if (is_class_method_udf_key(key))
+        return 1;
+    auto it = frame->pEnv->udf.find(key);
+    if (it == frame->pEnv->udf.end())
+        return 1;
+    // Same as ReadUDF's parse-error path: the entry is erased and its AST is not freed, so any
+    // stale AstNode* still held elsewhere stays valid.
+    frame->pEnv->udf.erase(it);
+    return 0;
 }
 
 int aux_install_graphics_backend(auxContext* ctx, const auxGraphicsBackend& backend)

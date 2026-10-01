@@ -285,6 +285,14 @@ AUXE_API vector<string> aux_enum_vars(auxContext* ctx);
 AUXE_API auxDebugAction aux_handle_debug_key(auxContext* ctx, const string& instr);
 
 AUXE_API int aux_register_udf(auxContext* ctx, const string& udfname);
+// Cached standalone UDFs: lower-case name -> file path recorded when the UDF was read.
+// The path is relative (e.g. "foo.aux") when the file was found in the current working
+// directory. Class method entries are not included.
+AUXE_API map<string, string> aux_list_udfs(auxContext* ctx);
+// Drop a cached standalone UDF so the next call searches for its file again (useful after the
+// working directory changes). Must not be called while the UDF is executing or paused in the
+// debugger. Returns 0 if removed, 1 if not cached, -1 on invalid context.
+AUXE_API int aux_forget_udf(auxContext* ctx, const string& udfname);
 AUXE_API auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act);
 AUXE_API const char* aux_get_status_message(auxContext* ctx);
 AUXE_API int aux_poll_async(auxContext* ctx); // returns number of completed async assignments committed

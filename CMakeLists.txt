@@ -318,6 +318,17 @@ if(AUXE_BUILD_TESTS)
     COMMAND auxe_regression_wav_header
   )
 
+  add_executable(auxe_regression_udf_cache
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_udf_cache.cpp
+  )
+  target_link_libraries(auxe_regression_udf_cache PRIVATE auxe)
+  target_include_directories(auxe_regression_udf_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+  add_test(
+    NAME auxe_regression_udf_cache
+    COMMAND auxe_regression_udf_cache
+  )
+
   add_library(auxe_test_native_module SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/test/native_module_fixture.cpp
   )

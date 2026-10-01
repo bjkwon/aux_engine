@@ -2,6 +2,10 @@
 
 This file records user-visible changes in each auxe release.
 
+## 2.6.1 - 2026-10-01
+
+auxe API revised to handle UDF search roots affected by app's system calls such as `cd`
+
 ## 2.6.0 - 2026-09-27
 
 Changes since 2.5.1.
