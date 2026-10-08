@@ -672,6 +672,17 @@ bool aux_get_segment(const AuxObj& v, int channel_index, int segment_index, AuxS
 
 bool aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sample, int num_timeline_samples, int offset_samples, vector<double>& out_db)
 {
+    if (!aux_fft_power_db(v, channel_index, start_timeline_sample, num_timeline_samples, offset_samples, out_db, -80.0)) {
+        return false;
+    }
+    for (auto& db : out_db) {
+        db = std::min(db, 0.0);
+    }
+    return true;
+}
+
+bool aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sample, int num_timeline_samples, int offset_samples, vector<double>& out_db, double floor_db)
+{
     out_db.clear();
     if (num_timeline_samples <= 0) return true;
 
@@ -708,7 +719,7 @@ bool aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sam
     }
 
     const size_t bins = static_cast<size_t>(fftOut.nSamples / 2 + 1);
-    out_db.assign(bins, -80.0);
+    out_db.assign(bins, floor_db);
     const double n = std::max(1.0, static_cast<double>(sig.nSamples));
     constexpr double kFloor = 1e-12;
     for (size_t k = 0; k < bins; ++k) {
@@ -717,9 +728,7 @@ bool aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sam
         if (k > 0 && k + 1 < bins) {
             amp *= 2.0; // one-sided amplitude for non-DC/non-Nyquist bins
         }
-        double db = 20.0 * std::log10(std::max(kFloor, amp));
-        db = std::clamp(db, -80.0, 0.0);
-        out_db[k] = db;
+        out_db[k] = std::max(floor_db, 20.0 * std::log10(std::max(kFloor, amp)));
     }
     return true;
 }

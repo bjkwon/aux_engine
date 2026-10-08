@@ -260,6 +260,8 @@ AUXE_API bool        aux_get_segment(const AuxObj& v, int channel_index, int seg
 AUXE_API size_t      aux_flatten_channel_length(const AuxObj& v, int channel_index);
 AUXE_API size_t      aux_flatten_channel(const AuxObj& v, int channel_index, auxtype* out, size_t max_len);
 AUXE_API bool        aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sample, int num_timeline_samples, int offset_samples, vector<double>& out_db);
+// Same as above but only floored at floor_db (no -80..0 dB clamp), for callers that rescale the result.
+AUXE_API bool        aux_fft_power_db(const AuxObj& v, int channel_index, int start_timeline_sample, int num_timeline_samples, int offset_samples, vector<double>& out_db, double floor_db);
 AUXE_API int         aux_get_vars(auxContext* ctx, vector<string>& vars);
 AUXE_API AuxObj      aux_get_var(auxContext* ctx, const string& varname);
 AUXE_API int         aux_set_handle_values(auxContext* ctx, const string& varname, const vector<uint64_t>& ids);
