@@ -1,0 +1,26 @@
+function y=concat_lr(indir, wavout)
+// hp1..hp110 in order, alternating channels: odd -> left, even -> right.
+// While one channel plays a sentence, the other is silent; 3 s of silence between sentences, 8 kHz output
+// wave() resamples to the runtime fs (set by "fs" in auxenv.json)
+if getfs()!=8000
+  error(sprintf("runtime fs is %d; set fs to 8000 in auxenv.json", getfs()))
+end
+gap = silence(3000)
+L = gap
+R = []
+for k=1:110
+  x = wave(sprintf("%s/hp%d-adj.wav", indir, k))
+  if k>1
+    L = L ++ gap
+    R = R ++ gap
+  end
+  if mod(k,2)==1
+    L = L ++ x
+    R = R ++ x*0
+  else
+    L = L ++ x*0
+    R = R ++ x
+  end
+end
+y = [L; R]
+y.wavwrite(wavout)

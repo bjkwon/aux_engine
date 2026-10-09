@@ -1,0 +1,10 @@
+function y=monotize(wavein, waveout)
+try
+x=wave(wavein)
+if x.isstereo
+x=x.left+x.right
+end
+x.write(waveout)
+catch e
+error(e.body)
+end
