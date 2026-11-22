@@ -1076,6 +1076,8 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 	const AstNode* plhs;
 	const AstNode* prhs;
 	bool isreplica = get_nodes_left_right_sides(pnode, &plhs, &prhs);
+	if (pnode && (pnode->suppress & AST_SUPPRESS_PROGRESSIVE_ASSIGN))
+		throw exception_etc(*this, pnode, "Progressive assignment is not implemented yet.").raise();
 	const bool is_async_assign = (pnode && (pnode->suppress & AST_FLAG_ASYNC_ASSIGN));
 	if (is_async_assign)
 	{

@@ -37,6 +37,7 @@ int parseTimeLiteralMs(const char *text, double *out_ms, int *out_mask);
 void registerNumberUnitMask(int line, int col, int mask);
 int consumeNumberUnitMask(int line, int col);
 void registerAsyncAssignMarker(int line, int col);
+void registerProgressiveAssignMarker(int line, int col);
 int consumeAsyncAssignMarker(int line, int col);
 
 #define TIME_UNIT_S 1
@@ -55,6 +56,7 @@ NumUnitTag *gNumUnitHead = NULL, *gNumUnitTail = NULL;
 typedef struct AsyncAssignTag_t {
 	int line;
 	int col;
+	int kind;
 	struct AsyncAssignTag_t *next;
 } AsyncAssignTag;
 
@@ -170,6 +172,12 @@ TIME_LITERAL	({NUM}[smh])+
 	yylloc.last_column += yyleng;
 	yy_pop_state();
 	return (unsigned char)yytext[0];
+	}
+"<~" {
+	yylloc.last_column += yyleng;
+	registerProgressiveAssignMarker(yylloc.first_line, yylloc.first_column);
+    if (str_mirror) strcat(str_mirror, yytext);
+	return '=';
 	}
 "<-" {
 	yylloc.last_column += yyleng;
@@ -401,18 +409,29 @@ int consumeNumberUnitMask(int line, int col)
 	return 0;
 }
 
-void registerAsyncAssignMarker(int line, int col)
+static void registerAssignMarker(int line, int col, int kind)
 {
 	AsyncAssignTag *node = (AsyncAssignTag *)malloc(sizeof(AsyncAssignTag));
 	if (!node) return;
 	node->line = line;
 	node->col = col;
+	node->kind = kind;
 	node->next = NULL;
 	if (gAsyncAssignTail)
 		gAsyncAssignTail->next = node;
 	else
 		gAsyncAssignHead = node;
 	gAsyncAssignTail = node;
+}
+
+void registerAsyncAssignMarker(int line, int col)
+{
+	registerAssignMarker(line, col, 1);
+}
+
+void registerProgressiveAssignMarker(int line, int col)
+{
+	registerAssignMarker(line, col, 2);
 }
 
 int consumeAsyncAssignMarker(int line, int col)
@@ -423,8 +442,9 @@ int consumeAsyncAssignMarker(int line, int col)
 			if (prev) prev->next = p->next;
 			else gAsyncAssignHead = p->next;
 			if (gAsyncAssignTail == p) gAsyncAssignTail = prev;
+			int kind = p->kind;
 			free(p);
-			return 1;
+			return kind;
 		}
 		prev = p;
 		p = p->next;

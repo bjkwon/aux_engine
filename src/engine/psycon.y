@@ -975,15 +975,17 @@ assign: tid assign2this
 	{
 		$$ = $1;
 		$$->child = $2;
-		if (consumeAsyncAssignMarker(@2.first_line, @2.first_column))
-			$$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		int marker = consumeAsyncAssignMarker(@2.first_line, @2.first_column);
+		if (marker == 1) $$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		if (marker == 2) $$->suppress |= AST_SUPPRESS_PROGRESSIVE_ASSIGN;
 	}
 	| varblock assign2this
 	{
 		$$ = $1;
 		$$->child = $2;
-		if (consumeAsyncAssignMarker(@2.first_line, @2.first_column))
-			$$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		int marker = consumeAsyncAssignMarker(@2.first_line, @2.first_column);
+		if (marker == 1) $$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		if (marker == 2) $$->suppress |= AST_SUPPRESS_PROGRESSIVE_ASSIGN;
 	}
 	| varblock '=' assign
 	{ //c=a(2)=44

@@ -1354,6 +1354,25 @@ static bool case_class_member_function_definition_is_rejected(std::string& err) 
   return true;
 }
 
+static bool case_progressive_assignment_rejected_without_side_effect(std::string& err) {
+  Session s("case_progressive_assignment_rejected_without_side_effect");
+  if (!s.ok()) { err = s.err; return false; }
+  std::string preview;
+  if (!expect_eval_ok(s, "x=7", "initial assignment") ||
+      aux_eval(&s.ctx, "x <~ 42", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR) ||
+      preview.find("Progressive assignment is not implemented yet") == std::string::npos) {
+    err = s.err.empty() ? "Expected a progressive-assignment error: " + preview : s.err;
+    return false;
+  }
+  AuxObj x = aux_get_var(s.ctx, "x");
+  double value = 0;
+  if (!x || aux_copy_vector(x, &value, 1) != 1 || value != 7) {
+    err = "Rejected progressive assignment changed its destination.";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct TestCase {
     const char* name;
@@ -1361,6 +1380,7 @@ int main() {
   };
 
   const TestCase tests[] = {
+    {"case_progressive_assignment_rejected_without_side_effect", case_progressive_assignment_rejected_without_side_effect},
     {"case_class_internal_tag_hidden_from_preview_and_members", case_class_internal_tag_hidden_from_preview_and_members},
     {"case_class_without_constructor_requires_parentheses", case_class_without_constructor_requires_parentheses},
     {"case_class_method_not_shadowed_by_caller_local", case_class_method_not_shadowed_by_caller_local},

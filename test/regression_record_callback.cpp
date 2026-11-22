@@ -1,6 +1,7 @@
 #include <auxe/auxe.h>
 
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -252,6 +253,54 @@ static bool case_user_style_callback_syntax(std::string& err) {
   return true;
 }
 
+// A recording callback can carry filter state and event arrays across blocks.
+// This exercises the existing callback mechanism, not progressive assignment.
+static bool case_loud_block_detector(std::string& err) {
+  Session s("case_loud_block_detector");
+  if (!s.ok()) { err = s.err; return false; }
+  if (!write_file(s.dir / "loudblocks.aux",
+                  "function [times,levels,state] = loudblocks(in)\n"
+                  "if in.?index==0\n"
+                  "    times=[]\n"
+                  "    levels=[]\n"
+                  "    state=0\n"
+                  "else\n"
+                  "    [filtered,state]=filt(in.?data,[0.5 0.5],1,state)\n"
+                  "    level=rms(filtered)\n"
+                  "    if level > -20\n"
+                  "        times ++= (in.?index-1)*10\n"
+                  "        levels ++= level\n"
+                  "        printf(\"%.0f %.2f\\n\",(in.?index-1)*10,level)\n"
+                  "    end\n"
+                  "end\n", s.err) ||
+      !define_register(s, "loudblocks")) { err = s.err; return false; }
+
+  if (!invoke_and_expect(s, 808, "loudblocks", payload_for(0, 8000, 1, {}), "", err)) return false;
+  if (!invoke_and_expect(s, 808, "loudblocks", payload_for(1, 8000, 1, std::vector<double>(80, 0.2)), "0 -11.01\n", err)) return false;
+  if (!invoke_and_expect(s, 808, "loudblocks", payload_for(2, 8000, 1, std::vector<double>(80, 0.2)), "10 -10.97\n", err)) return false;
+  if (!invoke_and_expect(s, 808, "loudblocks", payload_for(3, 8000, 1, std::vector<double>(80, 0.0)), "", err)) return false;
+  if (aux_set_handle_values(s.ctx, "detector", {808}) != 0 ||
+      aux_attach_record_callback_outputs_to_handle(s.ctx, 808, 808) != 0) {
+    err = "Could not attach detector outputs.";
+    return false;
+  }
+  auto members = aux_get_struct(s.ctx, "detector");
+  if (members.count("times") == 0 || members.count("levels") == 0 ||
+      aux_vector_length(members["times"]) != 2 || aux_vector_length(members["levels"]) != 2) {
+    err = "Detector outputs do not contain two aligned events.";
+    return false;
+  }
+  double times[2], levels[2];
+  if (aux_copy_vector(members["times"], times, 2) != 2 ||
+      aux_copy_vector(members["levels"], levels, 2) != 2 ||
+      times[0] != 0 || times[1] != 10 ||
+      std::abs(levels[0] - (-11.01)) > 0.01 || std::abs(levels[1] - (-10.97)) > 0.01) {
+    err = "Detector event arrays contain unexpected timestamps or levels.";
+    return false;
+  }
+  return true;
+}
+
 static bool case_outputs_attach_to_handle(std::string& err) {
   Session s("case_outputs_attach_to_handle");
   if (!s.ok()) { err = s.err; return false; }
@@ -327,6 +376,11 @@ int main() {
 
   if (!case_user_style_callback_syntax(err)) {
     std::cerr << "FAIL: case_user_style_callback_syntax: " << err << "\n";
+    return 1;
+  }
+
+  if (!case_loud_block_detector(err)) {
+    std::cerr << "FAIL: case_loud_block_detector: " << err << "\n";
     return 1;
   }
 

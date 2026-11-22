@@ -17,7 +17,7 @@ Cfunction set_builtin_function_filt(fGate fp)
 	set<uint16_t> allowedTypes2 = { 1, 2 };
 	ft.allowed_arg_types.push_back(allowedTypes2);
 	ft.allowed_arg_types.push_back(allowedTypes2);
-	ft.allowed_arg_types.push_back(allowedTypes1);
+	ft.allowed_arg_types.push_back({ 1, 2, 3, ALL_AUDIO_TYPES });
 	// til this line ==============
 	ft.desc_arg_req = desc_arg_req;
 	ft.desc_arg_opt = desc_arg_opt;
@@ -178,7 +178,13 @@ void _filt(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	{
 		CVar* extraOut = new CVar; // to carry a state array
 		past->Sig = past->Sig.evoke_modsig2(__filt, (void*)&args, (void*)extraOut);
-		if (get_output_count(past->node, pnode) > 1)
+		// The assignment currently being evaluated is authoritative even inside
+		// a conditional, where a line-based tree lookup can find the enclosing if.
+		const AstNode* lhs = past->u.pending_assign_lhs;
+		const bool directMultiOutput = past->u.pending_assign_rhs_call == pnode &&
+			lhs && lhs->type == N_VECTOR && lhs->str &&
+			((const AstNode*)lhs->str)->alt && ((const AstNode*)lhs->str)->alt->next;
+		if (directMultiOutput || get_output_count(past->node, pnode) > 1)
 		{
 			past->SigExt.push_back(move(make_unique<CVar>(past->Sig)));
 			unique_ptr<CVar> pt = make_unique<CVar>(*extraOut);

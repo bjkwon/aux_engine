@@ -36,6 +36,7 @@ typedef struct AstNode_t {
 } AstNode;
 
 #define AST_SUPPRESS_ASYNC_ASSIGN (1 << 20)
+#define AST_SUPPRESS_PROGRESSIVE_ASSIGN (1 << 21)
 
 extern int yydebug;
 

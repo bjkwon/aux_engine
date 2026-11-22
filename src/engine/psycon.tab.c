@@ -3783,8 +3783,9 @@ yyreduce:
         {
 		(yyval.pnode) = (yyvsp[-1].pnode);
 		(yyval.pnode)->child = (yyvsp[0].pnode);
-		if (consumeAsyncAssignMarker((yylsp[0]).first_line, (yylsp[0]).first_column))
-			(yyval.pnode)->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		int marker = consumeAsyncAssignMarker((yylsp[0]).first_line, (yylsp[0]).first_column);
+		if (marker == 1) (yyval.pnode)->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		if (marker == 2) (yyval.pnode)->suppress |= AST_SUPPRESS_PROGRESSIVE_ASSIGN;
 	}
 #line 3790 "src/engine/psycon.tab.c"
     break;
@@ -3794,8 +3795,9 @@ yyreduce:
         {
 		(yyval.pnode) = (yyvsp[-1].pnode);
 		(yyval.pnode)->child = (yyvsp[0].pnode);
-		if (consumeAsyncAssignMarker((yylsp[0]).first_line, (yylsp[0]).first_column))
-			(yyval.pnode)->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		int marker = consumeAsyncAssignMarker((yylsp[0]).first_line, (yylsp[0]).first_column);
+		if (marker == 1) (yyval.pnode)->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
+		if (marker == 2) (yyval.pnode)->suppress |= AST_SUPPRESS_PROGRESSIVE_ASSIGN;
 	}
 #line 3801 "src/engine/psycon.tab.c"
     break;
