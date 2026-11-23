@@ -1402,9 +1402,61 @@ static bool case_progressive_filter_and_replay(std::string& err) {
       aux_flatten_channel_length(aux_get_var(s.ctx,"snap"),0) != snapshotLength ||
       aux_flatten_channel(aux_get_var(s.ctx,"ref"),0,reference.data(),n) != n ||
       aux_flatten_channel(aux_get_var(s.ctx,"y"),0,actual.data(),n) != n || actual != reference ||
-      !eval("count=events.h.completed") || !expect_scalar_value(s,"count",n) ||
+      !eval("count=events.h.samples_completed") || !expect_scalar_value(s,"count",n) ||
       !eval("aliascount=handle.completed") || !expect_scalar_value(s,"aliascount",n)) {
     err = "Progressive samples, replay cursor or saved handle differ: " + s.err; return false;
+  }
+  if (!write_file(s.dir / "audioresult.aux",
+                  "function out=audioresult(chunk,t,prior,first)\n"
+                  "if first\n out.clean=chunk\nelse\n out=prior\n out.clean ++= chunk\nend\n"
+                  "out.h.completed=out.clean\nout.h.stream=1\n", s.err) ||
+      !define_register(s, "audioresult") ||
+      !eval("result <~ progblocks(x,10,\"audioresult\")")) {
+    err = s.err; return false;
+  }
+  aux_poll_async(s.ctx);
+  AuxObj resultObj = aux_get_var(s.ctx,"result");
+  AuxObj resultHandle = aux_get_struct_member(resultObj,"h");
+  AuxObj completedAudio = aux_get_struct_member(resultHandle,"completed");
+  if (!aux_progressive_audio(completedAudio) || aux_get_struct_member(resultHandle,"missing") ||
+      aux_get_struct_member(nullptr,"h")) {
+    err = "Could not resolve progressive audio through nested members"; return false;
+  }
+  std::shared_ptr<const auxProgressiveAudio> played;
+  auxPlaybackBackend audioBackend{};
+  audioBackend.userdata = &played;
+  audioBackend.start = [](void* data, uint64_t, AuxObj source, int, int, std::string&) {
+    *static_cast<std::shared_ptr<const auxProgressiveAudio>*>(data) = aux_progressive_audio(source);
+    return 1;
+  };
+  if (aux_install_playback_backend(s.ctx, audioBackend) != 0 ||
+      !eval("audio_handle=play(result.h.completed)") || !played ||
+      !played->ready() || played->finished() || played->totalFrames != n) {
+    err = "Playback did not retain the growing reducer output: " + s.err; return false;
+  }
+  const size_t initiallyReady = played->ready();
+  for (int i = 0; i < 200; ++i) aux_poll_async(s.ctx);
+  std::vector<double> inputSamples(n);
+  if (aux_flatten_channel(aux_get_var(s.ctx,"x"),0,inputSamples.data(),n) != n) {
+    err = "Could not read reducer input samples"; return false;
+  }
+  if (!eval("output=result.h.completed") || !eval("count=result.h.samples_completed") ||
+      !aux_is_audio(aux_get_var(s.ctx,"output")) ||
+      aux_flatten_channel_length(aux_get_var(s.ctx,"output"),0) != n ||
+      !expect_scalar_value(s,"count",n) || !played->finished() ||
+      played->ready() != n || played->ready() <= initiallyReady ||
+      !std::equal(inputSamples.begin(), inputSamples.end(), played->samples())) {
+    err = "Reducer did not preserve completed audio and sample count: " + s.err; return false;
+  }
+  if (!eval("result <~ progblocks(x,10,\"audioresult\")")) { err = s.err; return false; }
+  aux_poll_async(s.ctx);
+  if (!eval("audio_handle=play(result.h.completed)") || !played || played->finished()) {
+    err = "Could not start a second progressive playback: " + s.err; return false;
+  }
+  if (!eval("result=0")) { err = s.err; return false; }
+  aux_poll_async(s.ctx);
+  if (!played->finished() || !played->canceled()) {
+    err = "Replacing the reducer did not terminate its retained audio stream"; return false;
   }
   return true;
 }

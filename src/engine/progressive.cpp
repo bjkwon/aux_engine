@@ -3,6 +3,8 @@
 #include "AuxScope_exception.h"
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <stdexcept>
 #include <thread>
 
 // Only the job's worker writes frames. Publication makes all earlier frames
@@ -204,14 +206,46 @@ int AuxScope::publish_progressive() {
 class BlockReducer {
 public:
     explicit BlockReducer(EngineRuntime* env) : frame(env) {}
-    ~BlockReducer() { if (frame.node) yydeleteAstNode(frame.node, 0); frame.node = nullptr; }
+    ~BlockReducer() {
+        if (output && !output->finished()) output->stopped = true;
+        if (frame.node) yydeleteAstNode(frame.node, 0);
+        frame.node = nullptr;
+    }
     AuxScope frame;
     std::shared_ptr<const auxProgressiveAudio> source;
+    std::shared_ptr<FilterOutput> output;
     std::vector<double> input;
     size_t cursor = 0, windowIndex = 0;
     double windowFrames = 0, origin = 0;
     int fs = 0;
     double id = 0;
+
+    void publish_audio(CVar& handle) {
+        auto flag = handle.strut.find("stream");
+        if (!output && (flag == handle.strut.end() || !ISSCALARG(flag->second.type()) || flag->second.value() == 0))
+            return;
+        auto item = handle.strut.find("completed");
+        if (item == handle.strut.end())
+            throw std::runtime_error("A streaming callback must publish h.completed audio for every block.");
+        CVar& audio = item->second;
+        const size_t capacity = source ? source->totalFrames : input.size();
+        if (audio.GetFs() != fs || audio.next || audio.chain || audio.bufBlockSize != sizeof(double) ||
+            audio.nSamples != cursor || audio.nSamples > capacity)
+            throw std::runtime_error("h.completed must be contiguous mono audio with one output sample per processed input sample and the same sample rate.");
+        if (!output) {
+            output = std::make_shared<FilterOutput>();
+            output->totalFrames = capacity;
+            output->sampleRate = fs;
+            output->startMs = origin;
+            output->frames.reset(new double[capacity]);
+        }
+        const size_t previous = output->ready();
+        if (previous > cursor || (previous && std::memcmp(output->samples(), audio.buf, previous * sizeof(double)) != 0))
+            throw std::runtime_error("A streaming callback must preserve all previously published samples.");
+        std::copy(audio.buf + previous, audio.buf + cursor, output->frames.get() + previous);
+        output->count = cursor;
+        audio.progressive = output;
+    }
 
     bool advance(CVar& dest) {
         const size_t limit = source ? source->ready() : input.size();
@@ -235,10 +269,12 @@ public:
         }
         dest = frame.Vars["acc"];
         auto& handle = dest.strut["h"];
+        publish_audio(handle);
         handle.strut["id"].SetValue(id);
         handle.strut["type"].SetString("progressive_reducer");
-        handle.strut["completed"].SetValue(cursor);
+        handle.strut["samples_completed"].SetValue(cursor);
         bool done = terminal && cursor == limit;
+        if (done && output && cursor < output->totalFrames) output->stopped = true;
         handle.strut["status"].SetString(done ? (source && source->canceled() ? "canceled" : "done") : "running");
         return done;
     }
@@ -311,7 +347,8 @@ int AuxScope::publish_reducers() {
             if (job.cursor) var->second = job.frame.Vars["acc"];
             auto& h = var->second.strut["h"];
             h.strut["id"].SetValue(job.id);
-            h.strut["completed"].SetValue(job.cursor);
+            h.strut["type"].SetString("progressive_reducer");
+            h.strut["samples_completed"].SetValue(job.cursor);
             h.strut["status"].SetString("error");
             h.strut["error"].SetString(error.c_str());
         }

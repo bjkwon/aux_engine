@@ -283,6 +283,8 @@ AUXE_API AuxObj      aux_get_var(auxContext* ctx, const string& varname);
 AUXE_API int         aux_set_handle_values(auxContext* ctx, const string& varname, const vector<uint64_t>& ids);
 AUXE_API vector<AuxObj> aux_get_cell(auxContext* ctx, const string& varname);
 AUXE_API map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname);
+// Returns a borrowed member; valid only while the containing object remains unchanged.
+AUXE_API AuxObj aux_get_struct_member(AuxObj object, const string& name);
 AUXE_API int        aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uint16_t& type, string& size, string& preview);
 AUXE_API int         aux_preview_current(auxContext* ctx, const auxConfig& cfg, string& preview);
 

@@ -1144,6 +1144,14 @@ map<string, AuxObj> aux_get_struct(auxContext* ctx, const string& varname)
     return out;
 }
 
+AuxObj aux_get_struct_member(AuxObj object, const string& name)
+{
+    if (!object || is_hidden_struct_member(name)) return nullptr;
+    const CVar* value = asCVar(object);
+    const auto it = value->strut.find(name);
+    return it == value->strut.end() ? nullptr : reinterpret_cast<AuxObj>(&it->second);
+}
+
 
 int aux_describe_var(auxContext* ctx, const AuxObj& v, const auxConfig& cfg, uint16_t& type, string& size, string& preview)
 {

@@ -2,7 +2,9 @@
 #include "AuxScope_exception.h"
 
 #include <cmath>
+#include <cstring>
 #include <iostream>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -243,6 +245,17 @@ static bool case_overlapping_blocks(std::string& err) {
   return false;
 }
 
+static bool case_udf_scope_initialized(std::string& err) {
+  alignas(CUDF) unsigned char storage[sizeof(CUDF)];
+  std::memset(storage, 0xa5, sizeof(storage));
+  CUDF* udf = new (storage) CUDF;
+  const bool ok = udf->t_func == nullptr && udf->t_func_base == nullptr &&
+                  udf->nargin == 0 && udf->debugstatus == null;
+  udf->~CUDF();
+  if (!ok) err = "Fresh UDF scope retained uninitialized state";
+  return ok;
+}
+
 int main() {
   struct TestCase { const char* name; bool (*run)(std::string&); };
   const TestCase tests[] = {
@@ -251,6 +264,7 @@ int main() {
     {"errors_and_read_only", case_errors_and_read_only},
     {"overlapping_blocks", case_overlapping_blocks},
     {"adjacent_chains_dissolve", case_adjacent_chains_dissolve},
+    {"udf_scope_initialized", case_udf_scope_initialized},
   };
 
   bool ok = true;

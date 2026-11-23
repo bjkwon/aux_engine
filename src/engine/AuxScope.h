@@ -257,12 +257,12 @@ class CUDF
 public:
 	string title;
 	string base;
-	AstNode* t_func; // T_FUNCTION node
-	AstNode* t_func_base; // T_FUNCTION node for base udf
+	AstNode* t_func = nullptr; // T_FUNCTION node
+	AstNode* t_func_base = nullptr; // T_FUNCTION node for base udf
 	vector<string> argout; // formal output argument list; to be filled out in PrepareAndCallUDF()
 	int nextBreakPoint;
 	int currentLine;
-	int nargin;
+	int nargin = 0;
 	const AstNode* pending_assign_lhs;
 	const AstNode* pending_assign_rhs_call;
 	const AstNode* paused_node;
@@ -272,7 +272,7 @@ public:
 	const AstNode* pending_catchback_alt;
 	int pending_catchback_line;
 	int pending_catchback_col;
-	DEBUG_STATUS debugstatus;
+	DEBUG_STATUS debugstatus = null;
 	std::map<const AstNode*, unsigned int> debug_for_index;
 	std::map<const AstNode*, unsigned int> debug_for_count;
 	CUDF() { nextBreakPoint = currentLine = -1; pending_assign_lhs = nullptr; pending_assign_rhs_call = nullptr; paused_node = nullptr; paused_line = -1; pending_catchback_next = nullptr; pending_catchback_alt = nullptr; pending_catchback_line = -1; pending_catchback_col = -1; pLastRead = NULL; };
