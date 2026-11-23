@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +31,21 @@ typedef struct auxContext auxContext;
 // AuxObj is opaque, but actually a pointer type
 struct _AuxObj;
 using AuxObj = const _AuxObj*;
+
+// Retained mono frames. The prefix [0, ready()) is immutable and safe to
+// read on an audio thread for the lifetime of the shared reference.
+struct auxProgressiveAudio {
+    virtual ~auxProgressiveAudio() = default;
+    virtual size_t ready() const = 0;
+    virtual bool finished() const = 0;
+    virtual bool canceled() const = 0;
+    virtual const double* samples() const = 0;
+    size_t totalFrames = 0;
+    size_t rowFrames = 0;
+    int sampleRate = 0;
+    double startMs = 0;
+};
+AUXE_API std::shared_ptr<const auxProgressiveAudio> aux_progressive_audio(AuxObj object);
 
 static constexpr uint32_t AUXE_NATIVE_MODULE_ABI_VERSION = 1;
 
@@ -297,7 +313,10 @@ AUXE_API map<string, string> aux_list_udfs(auxContext* ctx);
 AUXE_API int aux_forget_udf(auxContext* ctx, const string& udfname);
 AUXE_API auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act);
 AUXE_API const char* aux_get_status_message(auxContext* ctx);
-AUXE_API int aux_poll_async(auxContext* ctx); // returns number of completed async assignments committed
+// filterUpdatesOnly permits a host to retain cached top-level audio prefixes.
+// Filter handle members, including h.block, can still change at the same size.
+AUXE_API int aux_poll_async(auxContext* ctx, bool& filterUpdatesOnly);
+AUXE_API int aux_poll_async(auxContext* ctx); // returns number of async assignments and progressive results updated
 
 AUXE_API int aux_install_graphics_backend(auxContext* ctx, const auxGraphicsBackend& backend);
 AUXE_API int aux_clear_graphics_backend(auxContext* ctx);

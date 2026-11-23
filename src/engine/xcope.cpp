@@ -850,6 +850,7 @@ vector<CVar*> AuxScope::Compute()
 	vector<CVar*> res;
 	Sig.cell.clear();
 	Sig.strut.clear();
+	Sig.progressive.reset();
 	Sig.struts.clear();
 	SigExt.clear();
 	Sig.functionEvalRes = false;
@@ -885,6 +886,7 @@ CVar* AuxScope::Compute(const AstNode* pnode)
 	//Need to clear these to avoid lingering effects. Necessary for input arguments binding in PrepareAndCallUDF
 	Sig.cell.clear();
 	Sig.strut.clear();
+	Sig.progressive.reset();
 	Sig.struts.clear();
 	Sig.functionEvalRes = false;
 	if (pEnv->xff.find(pnode->type)== pEnv->xff.end())
@@ -2867,6 +2869,7 @@ CVar* AuxScope::ConditionalOperation(const AstNode* pnode, AstNode* p)
 		// if (a==[1 4 5]).and statement; end
 	//At this point, need to clear struct or cell from Sig
 	Sig.strut.clear();
+	Sig.progressive.reset();
 	Sig.cell.clear();
 	return TID(pnode->alt, NULL, &Sig);
 }

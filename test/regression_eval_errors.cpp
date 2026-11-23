@@ -4,6 +4,8 @@
 #include <fstream>
 #include <iostream>
 #include <cmath>
+#include <thread>
+#include <chrono>
 #include <regex>
 #include <string>
 
@@ -1354,13 +1356,66 @@ static bool case_class_member_function_definition_is_rejected(std::string& err) 
   return true;
 }
 
+static bool case_progressive_filter_and_replay(std::string& err) {
+  Session s("case_progressive_filter_and_replay");
+  if (!s.ok()) { err = s.err; return false; }
+  auto eval = [&](const std::string& cmd) { return expect_eval_ok(s, cmd, cmd); };
+  if (!write_file(s.dir / "countframes.aux",
+                  "function out=countframes(chunk,t,prior,first)\n"
+                  "if first\n out=0\nelse\n out=prior\nend\nout+=chunk.length\n", s.err)
+      || !define_register(s, "countframes")
+      || !eval("x=tone(137,1300)") || !eval("b=[0.5 0.25]")
+      || !eval("ref=filt(x,b,[1 -0.2])") || !eval("y <~ x.filt(b,[1 -0.2]);")
+      || !eval("snap=y") || !eval("handle=y.h")
+      || !eval("events <~ progblocks(y,10,\"countframes\")")) {
+    err = s.err; return false;
+  }
+  auto stream = aux_progressive_audio(aux_get_var(s.ctx,"y"));
+  if (!stream || aux_progressive_audio(aux_get_var(s.ctx,"snap"))) {
+    err = "Expected a live result and a detached snapshot."; return false;
+  }
+  // A direct play call must hand the backend the bound live value. Copying
+  // its published prefix here makes startup proportional to the signal length.
+  struct PlaybackProbe {
+    AuxObj expected;
+    int starts = 0;
+  } probe{aux_get_var(s.ctx, "y")};
+  auxPlaybackBackend backend{};
+  backend.userdata = &probe;
+  backend.start = [](void* data, uint64_t, AuxObj source, int repeats, int reuse, std::string&) {
+    auto& probe = *static_cast<PlaybackProbe*>(data);
+    if (source == probe.expected && repeats == 1 && !reuse) ++probe.starts;
+    return 1;
+  };
+  if (aux_install_playback_backend(s.ctx, backend) != 0 || !eval("ph=play(y)") || probe.starts != 1) {
+    err = "play(y) did not start from the bound progressive source.";
+    return false;
+  }
+  const auto snapshotLength = aux_flatten_channel_length(aux_get_var(s.ctx,"snap"),0);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!stream->finished() && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  for (int i = 0; i < 200; ++i) aux_poll_async(s.ctx);
+  const size_t n = aux_flatten_channel_length(aux_get_var(s.ctx,"ref"),0);
+  std::vector<double> reference(n), actual(n);
+  if (!stream->finished() || snapshotLength >= n ||
+      aux_flatten_channel_length(aux_get_var(s.ctx,"snap"),0) != snapshotLength ||
+      aux_flatten_channel(aux_get_var(s.ctx,"ref"),0,reference.data(),n) != n ||
+      aux_flatten_channel(aux_get_var(s.ctx,"y"),0,actual.data(),n) != n || actual != reference ||
+      !eval("count=events.h.completed") || !expect_scalar_value(s,"count",n) ||
+      !eval("aliascount=handle.completed") || !expect_scalar_value(s,"aliascount",n)) {
+    err = "Progressive samples, replay cursor or saved handle differ: " + s.err; return false;
+  }
+  return true;
+}
+
 static bool case_progressive_assignment_rejected_without_side_effect(std::string& err) {
   Session s("case_progressive_assignment_rejected_without_side_effect");
   if (!s.ok()) { err = s.err; return false; }
   std::string preview;
   if (!expect_eval_ok(s, "x=7", "initial assignment") ||
       aux_eval(&s.ctx, "x <~ 42", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR) ||
-      preview.find("Progressive assignment is not implemented yet") == std::string::npos) {
+      preview.find("Progressive assignment supports") == std::string::npos) {
     err = s.err.empty() ? "Expected a progressive-assignment error: " + preview : s.err;
     return false;
   }
@@ -1380,6 +1435,7 @@ int main() {
   };
 
   const TestCase tests[] = {
+    {"case_progressive_filter_and_replay", case_progressive_filter_and_replay},
     {"case_progressive_assignment_rejected_without_side_effect", case_progressive_assignment_rejected_without_side_effect},
     {"case_class_internal_tag_hidden_from_preview_and_members", case_class_internal_tag_hidden_from_preview_and_members},
     {"case_class_without_constructor_requires_parentheses", case_class_without_constructor_requires_parentheses},

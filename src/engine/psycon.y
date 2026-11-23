@@ -223,7 +223,7 @@ line:	T_NEWLINE
 	| stmt eol2
 	{
 		$$ = $1;
-		$$->suppress=1;
+		$$->suppress = 1 | ($$->suppress & (AST_SUPPRESS_ASYNC_ASSIGN | AST_SUPPRESS_PROGRESSIVE_ASSIGN));
 	}
 	|  tid '|' T_ID T_NUMBER
 	{

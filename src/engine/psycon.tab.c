@@ -2732,7 +2732,7 @@ yyreduce:
 #line 224 "src/engine/psycon.y"
         {
 		(yyval.pnode) = (yyvsp[-1].pnode);
-		(yyval.pnode)->suppress=1;
+		(yyval.pnode)->suppress = 1 | ((yyval.pnode)->suppress & (AST_SUPPRESS_ASYNC_ASSIGN | AST_SUPPRESS_PROGRESSIVE_ASSIGN));
 	}
 #line 2738 "src/engine/psycon.tab.c"
     break;

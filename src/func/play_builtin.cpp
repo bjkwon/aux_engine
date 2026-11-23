@@ -95,6 +95,17 @@ void set_playback_handle_result(CVar& out, uint64_t handle_id, const CVar& audio
 	set_playback_member(out, "dur", audio_duration_ms(audio));
 	set_playback_member(out, "repeat_left", std::max(0, repeat_count - 1));
 	set_playback_member(out, "prog", 0.0);
+    set_playback_member(out, "active", 1);
+    set_playback_member(out, "paused", 0);
+    set_playback_member(out, "underflow_count", 0);
+    set_playback_member(out, "underflow_duration", 0);
+    if (audio.progressive) {
+        set_playback_member(out, "source_underflow_count", 0);
+        set_playback_member(out, "underflow_blocks", 0);
+        set_playback_member(out, "blocks_requested", 0);
+        set_playback_member(out, "dur", audio.progressive->startMs +
+            1000.0 * repeat_count * audio.progressive->totalFrames / audio.progressive->sampleRate);
+    }
 }
 
 uint64_t next_playback_handle_id()
@@ -169,6 +180,33 @@ Cfunction set_builtin_function_stop_pause_resume(fGate fp)
 	ft.narg2 = 1;
 	ft.allowed_arg_types.push_back({ 0xFFFF });
 	return ft;
+}
+
+static void start_playback(AuxScope* past, const AstNode* call, const CVar& audio,
+                           uint64_t handle_id, int repeat, bool reuse)
+{
+	if (!past->pEnv->playback_backend.start)
+		throw exception_etc(*past, call, "Audio playback backend not available in this frontend.").raise();
+	set_playback_handle_result(past->Sig, handle_id, audio, repeat);
+
+	string err;
+	const int ok = past->pEnv->playback_backend.start(
+		past->pEnv->playback_backend.userdata,
+		handle_id,
+		reinterpret_cast<AuxObj>(&audio),
+		repeat,
+		reuse,
+		err);
+	if (ok == 0) {
+		past->Sig.Reset(1);
+		past->Sig.SetValue(-1.);
+		return;
+	}
+}
+
+void start_single_playback(AuxScope* past, const AstNode* call, const CVar& audio)
+{
+	start_playback(past, call, audio, next_playback_handle_id(), 1, false);
 }
 
 void _play(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
@@ -248,25 +286,14 @@ void _play(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	const uint64_t handle_id = parsed.handle_arg
 		? static_cast<uint64_t>(std::llround(parsed.handle_arg->value()))
 		: next_playback_handle_id();
-	set_playback_handle_result(past->Sig, handle_id, audio_copy, parsed.repeat_count);
-
-	string err;
-	const int ok = past->pEnv->playback_backend.start(
-		past->pEnv->playback_backend.userdata,
-		handle_id,
-		reinterpret_cast<AuxObj>(&audio_copy),
-		parsed.repeat_count,
-		parsed.handle_arg ? 1 : 0,
-		err);
-	if (ok == 0) {
-		past->Sig.Reset(1);
-		past->Sig.SetValue(-1.);
-		return;
-	}
+	start_playback(past, pnode, audio_copy, handle_id, parsed.repeat_count, parsed.handle_arg != nullptr);
 }
 
 void _stop_pause_resume(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
+    if (past && pnode && !strcmp(pnode->str, "stop") && past->cancel_progressive(past->Sig))
+        return;
+
 	if (!past || !past->pEnv || !past->pEnv->playback_backend.control)
 		throw exception_etc(*past, pnode, "Audio playback control backend not available in this frontend.").raise();
 

@@ -16,6 +16,8 @@
 #include <complex>
 #include <vector>
 #include <map>
+#include <memory>
+struct auxProgressiveAudio;
 #include <functional>
 
 using namespace std;
@@ -639,6 +641,7 @@ public:
 	map<std::string, CVar> strut;
 	map<std::string, vector<CVar *>> struts;
 	bool runtimeHandle = false;
+	std::shared_ptr<const auxProgressiveAudio> progressive;
 
 	bool functionEvalRes;
 
@@ -693,7 +696,7 @@ public:
 	{
 		uint16_t out = CSignals::type();
 		if (!cell.empty())		out += TYPEBIT_CELL;
-		else if (!strut.empty())
+		else if (!strut.empty() && !(progressive && strut.size() == 1 && strut.count("h")))
 		{
 			out += TYPEBIT_STRUT;
 			if (!struts.empty()) out += TYPEBIT_HANDLE;

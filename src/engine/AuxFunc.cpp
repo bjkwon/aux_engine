@@ -554,7 +554,11 @@ vector<CVar> AuxScope::make_check_args(const AstNode* pnode, multimap<string, Cf
 	}
 	if (Sig.type() == TYPEBIT_NULL && func.narg1 == 0 && func.narg2 > 0)
 		Sig = func.defaultarg.front();
-	AuxScope smallAuxScope(this);
+	// With no remaining expressions, validation only needs Sig and defaults.
+	std::unique_ptr<AuxScope> argumentScope;
+	if (get_second_arg(pnode, struct_call))
+		argumentScope = std::make_unique<AuxScope>(this);
+	AuxScope& evaluator = argumentScope ? *argumentScope : *this;
 	int argind;
 	string errmsg;
 	int count_ftlist = 0;
@@ -562,14 +566,14 @@ vector<CVar> AuxScope::make_check_args(const AstNode* pnode, multimap<string, Cf
 		int count = 2;
 		func = (*ftlist).second;
 		if (func.qualify.empty() && func.reject.empty()) {
-			if (check_more(pnode, struct_call, smallAuxScope, func, out, Sig, argind, count, errmsg)) {
+			if (check_more(pnode, struct_call, evaluator, func, out, Sig, argind, count, errmsg)) {
 				for (; count < func.narg2; count++)
 					out.push_back(CVar(func.defaultarg[count - func.narg1]));
 				return out;
 			}
 		}
 		else {
-			if (check_more2(pnode, struct_call, smallAuxScope, func, out, Sig, argind, count, errmsg)) {
+			if (check_more2(pnode, struct_call, evaluator, func, out, Sig, argind, count, errmsg)) {
 				for (; count < func.narg2; count++)
 					out.push_back(CVar(func.defaultarg[count - func.narg1]));
 				return out;
@@ -614,6 +618,8 @@ const AstNode* arg0node(const AstNode* pnode, const AstNode* pRoot0)
 	}
 }
 
+void start_single_playback(AuxScope*, const AstNode*, const CVar&);
+
 void AuxScope::HandleAuxFunction(const AstNode *pnode)
 {
 	string fnsigs;
@@ -623,6 +629,13 @@ void AuxScope::HandleAuxFunction(const AstNode *pnode)
 	const AstNode* arg0 = arg0node(pnode, node);
 	if (!structCall)
 	{
+		if (fname == "play" && arg0 && arg0->type == T_ID && !arg0->alt && !arg0->next) {
+			auto input = Vars.find(arg0->str);
+			if (input != Vars.end() && input->second.progressive && input->second.GetFs() > 1) {
+				start_single_playback(this, pnode, input->second);
+				return;
+			}
+		}
 		if (arg0)
 			Compute(arg0); // Update Sig with arg0; For strucCall, it was already done in read_node()
 		else

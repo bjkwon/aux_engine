@@ -374,7 +374,14 @@ public:
 	vector<float> ends;
 	int channelWriteSel = 0; // 0=whole object, 1=.left-scoped, 2=.right-scoped write target (set by get_available_struct_item, consumed by insertreplace)
 	CVar* process_statement(const AstNode* pnode);
-	int drain_async_jobs();
+	int drain_async_jobs(bool& filterUpdatesOnly);
+    CVar* start_progressive(const AstNode* lhs, const AstNode* rhs);
+    int publish_progressive();
+    bool cancel_progressive(const CVar& handle);
+    CVar* start_reducer(const AstNode* lhs, const AstNode* args);
+    int publish_reducers();
+    std::map<string, std::shared_ptr<class BlockReducer>> reducers;
+    std::map<string, std::shared_ptr<class ProgressiveFilterJob>> progressiveJobs;
 
 	bool fBreak;
 	bool fContinue;

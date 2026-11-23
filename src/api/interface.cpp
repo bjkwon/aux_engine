@@ -796,9 +796,9 @@ int aux_get_vars(auxContext* ctx, vector<string>& vars)
 {
     auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame) return -1;
-    for (auto v : frame->Vars)
+    for (const auto& v : frame->Vars)
         vars.push_back(v.first);
-    for (auto v : frame->GOvars)
+    for (const auto& v : frame->GOvars)
         vars.push_back(v.first);
     return 0;
 }
@@ -1392,9 +1392,9 @@ vector<string> aux_enum_vars(auxContext* ctx)
     if (!ctx || !frame->pEnv) {
         return out;  // null pointer or environment not initialized
     }
-    for (auto v : frame->Vars)
+    for (const auto& v : frame->Vars)
         out.push_back(v.first);
-    for (auto v : frame->GOvars)
+    for (const auto& v : frame->GOvars)
         out.push_back(v.first);
     return out;
 }
@@ -1765,13 +1765,25 @@ const char* aux_get_status_message(auxContext* ctx)
     return frame->statusMsg.empty() ? nullptr : frame->statusMsg.c_str();
 }
 
+std::shared_ptr<const auxProgressiveAudio> aux_progressive_audio(AuxObj obj)
+{
+    return obj ? asCVar(obj)->progressive : nullptr;
+}
+
 int aux_poll_async(auxContext* ctx)
 {
+    bool filterUpdatesOnly;
+    return aux_poll_async(ctx, filterUpdatesOnly);
+}
+
+int aux_poll_async(auxContext* ctx, bool& filterUpdatesOnly)
+{
+    filterUpdatesOnly = true;
     AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return 0;
     }
-    return frame->drain_async_jobs();
+    return frame->drain_async_jobs(filterUpdatesOnly);
 }
 
 int aux_debug_get_pause_info(auxContext* ctx, auxDebugInfo& out)

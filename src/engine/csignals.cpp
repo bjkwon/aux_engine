@@ -223,6 +223,7 @@ CVar& CVar::operator=(const CVar& rhs)
 		strut = rhs.strut;
 		struts = rhs.struts;
 		runtimeHandle = rhs.runtimeHandle;
+		progressive = rhs.progressive;
 	}
 	return *this;
 }
@@ -3055,6 +3056,7 @@ CVar& CVar::Reset(int fs2set)
 	cell.clear();
 	strut.clear();
 	struts.clear();
+	progressive.reset();
 	runtimeHandle = false;
 	return *this;
 }

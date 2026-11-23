@@ -181,9 +181,13 @@ static int drain_async_assign_jobs(AuxScope& ths)
 	return changed;
 }
 
-int AuxScope::drain_async_jobs()
+int AuxScope::drain_async_jobs(bool& filterUpdatesOnly)
 {
-	return drain_async_assign_jobs(*this);
+	const int assignments = drain_async_assign_jobs(*this);
+	const int filters = publish_progressive();
+	const int reducers = publish_reducers();
+	filterUpdatesOnly = assignments == 0 && reducers == 0;
+	return assignments + filters + reducers;
 }
 
 bool AuxScope::get_nodes_left_right_sides(const AstNode* pnode, const AstNode** plhs, const AstNode** prhs)
@@ -1077,7 +1081,7 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 	const AstNode* prhs;
 	bool isreplica = get_nodes_left_right_sides(pnode, &plhs, &prhs);
 	if (pnode && (pnode->suppress & AST_SUPPRESS_PROGRESSIVE_ASSIGN))
-		throw exception_etc(*this, pnode, "Progressive assignment is not implemented yet.").raise();
+		return start_progressive(plhs, prhs);
 	const bool is_async_assign = (pnode && (pnode->suppress & AST_FLAG_ASYNC_ASSIGN));
 	if (is_async_assign)
 	{
@@ -1115,6 +1119,11 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 		RHS = Compute(prhs);
 	if (plhs)
 	{
+		if (RHS.progressive) { // Ordinary assignment freezes the current prefix.
+			RHS.progressive.reset();
+			RHS.strut.erase("h");
+			Sig = RHS;
+		}
 		uint16_t typelhs;
 		bool contig;
 		CVar index;
@@ -1128,6 +1137,13 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 		sanitize_cell_node(plhs);
 		eval_lhs(plhs, prhs, index, RHS, typelhs, contig, isreplica);
 		right_to_left(plhs, index, RHS, typelhs, contig, isreplica ? prhs:NULL);
+		if (plhs->type == T_ID && plhs->alt) {
+			auto dest = Vars.find(plhs->str);
+			if (dest != Vars.end() && dest->second.progressive) {
+				dest->second.progressive.reset();
+				dest->second.strut.erase("h");
+			}
+		}
 	}
 	u.pending_assign_lhs = nullptr;
 	u.pending_assign_rhs_call = nullptr;
