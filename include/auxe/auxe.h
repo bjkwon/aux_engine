@@ -326,6 +326,8 @@ AUXE_API bool aux_has_graphics_backend(auxContext* ctx);
 AUXE_API int aux_graphics_notify(auxContext* ctx, const auxGraphicsEvent& event, string& errstr);
 
 AUXE_API int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBackend& backend);
+using auxStreamStartHook = int(*)(void* userdata, uint64_t handle_id, const string& path_or_url, string& errstr);
+AUXE_API int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBackend& backend, auxStreamStartHook stream_start);
 AUXE_API int aux_clear_playback_backend(auxContext* ctx);
 AUXE_API bool aux_has_playback_backend(auxContext* ctx);
 AUXE_API int aux_update_runtime_handle_members(auxContext* ctx, uint64_t handle_id, const map<string, double>& members);

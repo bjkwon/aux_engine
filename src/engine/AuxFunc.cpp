@@ -247,6 +247,7 @@ void EngineRuntime::InitBuiltInFunctions()
 	SET_BUILTIN_FUNC("delete", delete);
 	SET_BUILTIN_FUNC("repaint", repaint);
 	SET_BUILTIN_FUNC("play", play);
+	SET_BUILTIN_FUNC("streamplay", streamplay);
 	SET_BUILTIN_FUNC("record", record);
 	SET_BUILTIN_FUNC("stop", stop_pause_resume);
 	SET_BUILTIN_FUNC("pause", stop_pause_resume);

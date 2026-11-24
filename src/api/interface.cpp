@@ -1528,6 +1528,11 @@ int aux_install_graphics_backend(auxContext* ctx, const auxGraphicsBackend& back
 
 int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBackend& backend)
 {
+    return aux_install_playback_backend(ctx, backend, nullptr);
+}
+
+int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBackend& backend, auxStreamStartHook stream_start)
+{
     AuxScope* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!ctx || !frame->pEnv) {
         return 1;
@@ -1536,6 +1541,7 @@ int aux_install_playback_backend(auxContext* ctx, const auxPlaybackBackend& back
         return 1;
     }
     frame->pEnv->playback_backend = backend;
+    frame->pEnv->stream_start = stream_start;
     return 0;
 }
 
@@ -1546,6 +1552,7 @@ int aux_clear_playback_backend(auxContext* ctx)
         return 1;
     }
     frame->pEnv->playback_backend = auxPlaybackBackend{};
+    frame->pEnv->stream_start = nullptr;
     return 0;
 }
 

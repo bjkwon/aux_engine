@@ -86,26 +86,19 @@ void set_recording_member(CVar& target, const char* name, double value)
 	set_playback_member(target, name, value);
 }
 
-void set_playback_handle_result(CVar& out, uint64_t handle_id, const CVar& audio, int repeat_count)
+void set_playback_handle_result(CVar& out, uint64_t handle_id, int fs, double duration_ms, int repeat_count)
 {
 	out.Reset(1);
 	out.SetValue(static_cast<auxtype>(handle_id));
 	out.MarkHandle(true);
-	set_playback_member(out, "fs", audio_sample_rate(audio));
-	set_playback_member(out, "dur", audio_duration_ms(audio));
+	set_playback_member(out, "fs", fs);
+	set_playback_member(out, "dur", duration_ms);
 	set_playback_member(out, "repeat_left", std::max(0, repeat_count - 1));
 	set_playback_member(out, "prog", 0.0);
     set_playback_member(out, "active", 1);
     set_playback_member(out, "paused", 0);
     set_playback_member(out, "underflow_count", 0);
     set_playback_member(out, "underflow_duration", 0);
-    if (audio.progressive) {
-        set_playback_member(out, "source_underflow_count", 0);
-        set_playback_member(out, "underflow_blocks", 0);
-        set_playback_member(out, "blocks_requested", 0);
-        set_playback_member(out, "dur", audio.progressive->startMs +
-            1000.0 * repeat_count * audio.progressive->totalFrames / audio.progressive->sampleRate);
-    }
 }
 
 uint64_t next_playback_handle_id()
@@ -165,6 +158,33 @@ bool try_parse_play_call(const vector<const CVar*>& actuals, PlayCall& out)
 
 } // namespace
 
+Cfunction set_builtin_function_streamplay(fGate fp)
+{
+    Cfunction ft;
+    ft.func = fp;
+    ft.alwaysstatic = true;
+    ft.desc_arg_req = { "path_or_url" };
+    ft.allowed_arg_types.push_back({ TYPEBIT_STRING + 1, TYPEBIT_STRING + 2 });
+    ft.narg1 = ft.narg2 = 1;
+    return ft;
+}
+
+void _streamplay(AuxScope* past, const AstNode* call, const vector<CVar>&)
+{
+    const auto start = past->pEnv->stream_start;
+    if (!start)
+        throw exception_etc(*past, call, "Streaming playback is unavailable in this frontend.").raise();
+    const auto source = past->Sig.str();
+    if (source.empty())
+        throw exception_etc(*past, call, "streamplay() requires a file path or HTTP(S) URL.").raise();
+    const auto id = next_playback_handle_id();
+    string err;
+    if (!start(past->pEnv->playback_backend.userdata, id, source, err))
+        throw exception_etc(*past, call, err.empty() ? "Could not start streaming playback." : err).raise();
+    set_playback_handle_result(past->Sig, id, 0, 0, 1);
+    set_playback_member(past->Sig, "durLeft", 0);
+}
+
 Cfunction set_builtin_function_play(fGate fp)
 {
 	return make_play_builtin(fp);
@@ -187,7 +207,14 @@ static void start_playback(AuxScope* past, const AstNode* call, const CVar& audi
 {
 	if (!past->pEnv->playback_backend.start)
 		throw exception_etc(*past, call, "Audio playback backend not available in this frontend.").raise();
-	set_playback_handle_result(past->Sig, handle_id, audio, repeat);
+	set_playback_handle_result(past->Sig, handle_id, audio_sample_rate(audio), audio_duration_ms(audio), repeat);
+    if (audio.progressive) {
+        set_playback_member(past->Sig, "source_underflow_count", 0);
+        set_playback_member(past->Sig, "underflow_blocks", 0);
+        set_playback_member(past->Sig, "blocks_requested", 0);
+        set_playback_member(past->Sig, "dur", audio.progressive->startMs +
+            1000.0 * repeat * audio.progressive->totalFrames / audio.progressive->sampleRate);
+    }
 
 	string err;
 	const int ok = past->pEnv->playback_backend.start(

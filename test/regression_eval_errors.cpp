@@ -1461,6 +1461,30 @@ static bool case_progressive_filter_and_replay(std::string& err) {
   return true;
 }
 
+static bool case_streamplay_source(std::string& err) {
+  Session s("case_streamplay_source");
+  if (!s.ok()) { err = s.err; return false; }
+  unsigned starts = 0;
+  auxPlaybackBackend backend{};
+  backend.userdata = &starts;
+  backend.start = [](void*, uint64_t, AuxObj, int, int, std::string&) { return 0; };
+  const auto stream = [](void* data, uint64_t id, const std::string& path, std::string&) {
+    ++*static_cast<unsigned*>(data);
+    return int(id != 0 && path == "https://example.invalid/a.wav?x=1&y=2");
+  };
+  if (aux_install_playback_backend(s.ctx, backend, stream) ||
+      !expect_eval_ok(s, "p=streamplay(\"https://example.invalid/a.wav?x=1&y=2\")", "stream from URL") ||
+      !expect_eval_ok(s, "active=p.active", "inspect stream handle") ||
+      !expect_scalar_value(s, "active", 1) ||
+      !expect_eval_error(s, "streamplay(tone(440,10))", "audio object input") ||
+      starts != 1 ||
+      !expect_eval_error(s, "streamplay(\"missing.wav\")", "backend failure")) {
+    err = s.err.empty() ? "Unexpected stream backend dispatch" : s.err;
+    return false;
+  }
+  return true;
+}
+
 static bool case_progressive_assignment_rejected_without_side_effect(std::string& err) {
   Session s("case_progressive_assignment_rejected_without_side_effect");
   if (!s.ok()) { err = s.err; return false; }
@@ -1487,6 +1511,7 @@ int main() {
   };
 
   const TestCase tests[] = {
+    {"case_streamplay_source", case_streamplay_source},
     {"case_progressive_filter_and_replay", case_progressive_filter_and_replay},
     {"case_progressive_assignment_rejected_without_side_effect", case_progressive_assignment_rejected_without_side_effect},
     {"case_class_internal_tag_hidden_from_preview_and_members", case_class_internal_tag_hidden_from_preview_and_members},

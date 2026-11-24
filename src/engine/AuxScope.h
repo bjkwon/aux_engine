@@ -193,6 +193,7 @@ public:
 	bool shutdown;
 	auxGraphicsBackend graphics_backend;
 	auxPlaybackBackend playback_backend;
+	auxStreamStartHook stream_start = nullptr;
 	map<string, NativeModuleFunction> native_module_functions;
 	map<string, string> native_module_aliases;
 	map<string, NativeModuleHandle> native_modules;

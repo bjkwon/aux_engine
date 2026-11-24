@@ -124,6 +124,7 @@ void _interp1(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _fdelete(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 void _isaudioat(AuxScope* past, const AstNode* pnode, const vector<CVar>& args);
 DECL_GATE(_play)
+DECL_GATE(_streamplay)
 DECL_GATE(_play2)
 DECL_GATE(_record)
 DECL_GATE(_stop_pause_resume)
