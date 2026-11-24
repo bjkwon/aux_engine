@@ -2,9 +2,22 @@
 
 This file records user-visible changes in each auxe release.
 
-## Unreleased
+## 2.7.0 - 2026-11-23
 
-- Use `<-` for nonblocking assignment. A direct `filt` or `progblocks` call publishes progress. Other expressions publish one final value or error. Replace `<~` with `<-` in existing scripts. Reassigning or clearing the destination prevents late results from overwriting it.
+### Nonblocking assignment
+
+- Use `<-` with a plain top-level variable. The outermost call determines when the engine publishes a result. Direct calls to `filt` and `progblocks` publish incrementally. Other expressions, including `r <- sum(filt(x,b))`, use the workspace values captured at launch and publish one final value or error. Reassigning or clearing the destination discards late results from the old job.
+- Replace the experimental `<~` spelling with `<-` in progressive scripts. An ordinary assignment such as `snapshot = y` copies the samples available at that moment.
+
+### Progressive audio and block callbacks
+
+- `y <- filt(x,b)` and `y <- x.filt(b)` retain completed samples from contiguous real mono audio or real vectors. Filter state carries across blocks. Inspect `y.h.block` for the latest block and `y.h.completed` for the sample count. Use `stop(y.h)` to cancel.
+- `r <- progblocks(x,window_ms,"callback",...)` passes each window, its start time in milliseconds, the previous result, and a first-window flag to a named UDF. The engine publishes the returned accumulator after each window. A callback can set `out.h.stream = 1` and publish growing mono audio in `out.h.completed`. The input sample count is available in `r.h.samples_completed`.
+
+### Playback and embedding
+
+- Added `streamplay(path_or_url)` for frontends that install the stream-start hook. It returns a playback handle and delegates media reading and decoding to the frontend. AUX retains no sample array for this operation.
+- Embedders can read published frames through `aux_progressive_audio` and access nested output through `aux_get_struct_member`. Call `aux_poll_async` on the evaluator thread to publish results and advance block callbacks. The `aux2` console polls while waiting for input.
 
 ## 2.6.1 - 2026-10-01
 
