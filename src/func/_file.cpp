@@ -2,10 +2,14 @@
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <climits>
+#include <filesystem>
 #include <cstdio>
 #include <cstdlib>
 #include <string.h> // aux_file
 #include "_file_wav.h"
+#include "audio_file_reader.h"
+#include <stdexcept>
 #include "_file_mp3.h"
 #ifndef _WIN32
 #include <unistd.h>
@@ -1002,85 +1006,80 @@ void _write(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		throw exception_func(*past, pnode, "The extension must be specified .wav .mp3 or .txt").raise();
 }
 
+static AudioFileReader open_wave_reader(const string& path, double beginMs, double endMs)
+{
+	string err;
+	WavInfo info;
+	if (!wav_read_header(path, info, err))
+		throw runtime_error(err);
+	if (!std::isfinite(beginMs) || !std::isfinite(endMs))
+		throw runtime_error("WAV range must contain finite times.");
+	if (info.num_channels > 2 || info.sample_rate > INT_MAX)
+		throw runtime_error("Expected a mono or stereo WAV with a supported sample rate.");
+	size_t frames = info.data_size / info.block_align;
+	auto frameAt = [&](double ms) {
+		return static_cast<size_t>(std::clamp(ms / 1000.0 * info.sample_rate + .5, 0.0, double(frames)));
+	};
+	size_t first = frameAt(beginMs);
+	size_t end = endMs < 0 ? frames : frameAt(endMs);
+	shared_ptr<FILE> fp(fopen(path.c_str(), "rb"), [](FILE* f) { if (f) fclose(f); });
+	if (!fp) throw runtime_error("File cannot be opened: " + path);
+	auto offset = info.data_offset + first * info.block_align;
+#ifdef _WIN32
+	if (_fseeki64(fp.get(), offset, SEEK_SET))
+#else
+	if (fseeko(fp.get(), offset, SEEK_SET))
+#endif
+		throw runtime_error("Cannot seek to WAV data: " + path);
+	AudioFileReader reader;
+	reader.frames = std::max(first, end) - first;
+	reader.sampleRate = info.sample_rate;
+	reader.channels = info.num_channels;
+	reader.read = [fp, info](size_t frames, vector<float>& out) {
+		string err;
+		auto got = wav_read_float32(fp.get(), frames, info, out, err);
+		if (!err.empty()) throw runtime_error(err);
+		return got;
+	};
+	return reader;
+}
+
 void _wave(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
-	string estr;
-	string filename = past->Sig.str();
-	string sourceName = filename;
-	ScopedTempFile tempWaveFile;
-	if (is_remote_url(filename)) {
-		string tempPath;
-		if (!make_temp_remote_path(tempPath, estr))
-			throw exception_etc(past, pnode, estr).raise();
-		if (!download_remote_url_to_file(filename, tempPath, estr))
-			throw exception_etc(past, pnode, estr).raise();
-		tempWaveFile.path = tempPath;
-		sourceName = tempPath;
+	string path = past->Sig.str();
+	shared_ptr<ScopedTempFile> temp;
+	if (is_remote_url(path)) {
+		string err;
+		temp = make_shared<ScopedTempFile>();
+		if (!make_temp_remote_path(temp->path, err) || !download_remote_url_to_file(path, temp->path, err))
+			throw exception_etc(past, pnode, err).raise();
+		path = temp->path;
 	}
-	double beginMs = args[0].value();
-	double durMs = args[1].value();
-	WavInfo wavinfo;
-	int res = wav_read_header(sourceName, wavinfo, estr);
-	if (!res)
-		throw exception_etc(past, pnode, estr).raise();
-
-	size_t count;
-	past->Sig.Reset(wavinfo.sample_rate);
-	past->Sig.bufType = 'R';
-	size_t frames = wavinfo.data_size / wavinfo.block_align; // block_align is validated in wav_read_header
-	size_t id1 = (size_t)(beginMs / 1000.f * wavinfo.sample_rate + .5);
-	if (id1 > frames)
-		id1 = frames;
-	FILE* fp = fopen(sourceName.c_str(), "rb");
-	if (!fp)
-		throw exception_etc(*past, pnode, "File cannot be opened: " + sourceName).raise();
-	res = fseek(fp, res + id1 * wavinfo.block_align, SEEK_SET);
-	// Keep this signed and 64-bit: a truncated int here used to turn a bogus
-	// request into a gigantic buffer allocation.
-	int64_t _frames2read;
-	if (durMs < 0)
-		_frames2read = (int64_t)(frames - id1);
-	else
-		_frames2read = (int64_t)(durMs / 1000.f * wavinfo.sample_rate + .5) - (int64_t)id1;
-	if (_frames2read < 0)
-		_frames2read = 0;
-	// Never read (or allocate) beyond what the file actually holds.
-	if ((uint64_t)_frames2read > frames - id1)
-		_frames2read = (int64_t)(frames - id1);
-	size_t frames2read = (size_t)_frames2read;
-	if (wavinfo.num_channels == 1)
-	{
+	try {
+		auto reader = open_wave_reader(path, args[0].value(), args[1].value());
+		reader.temporaryFile = temp;
+		if (pnode == past->progressiveFileCall) {
+			past->prepare_file_audio(std::move(reader));
+			return;
+		}
 		vector<float> buffer;
-		count = wav_read_float32(fp, frames2read, wavinfo, buffer, estr);
-		if (!estr.empty()) {
-			fclose(fp);
-			throw exception_etc(*past, pnode, estr).raise();
+		auto count = reader.read(reader.frames, buffer);
+		past->Sig.Reset(reader.sampleRate);
+		past->Sig.bufType = 'R';
+		past->Sig.UpdateBuffer(count);
+		if (reader.channels == 2) {
+			past->Sig.next = new CSignals(reader.sampleRate);
+			past->Sig.next->UpdateBuffer(count);
+			for (size_t k = 0; k < count; ++k) {
+				past->Sig.buf[k] = buffer[2*k];
+				past->Sig.next->buf[k] = buffer[2*k+1];
+			}
+		} else {
+			std::copy(buffer.begin(), buffer.end(), past->Sig.buf);
 		}
-		past->Sig.UpdateBuffer((uint64_t)count);
-		uint64_t id = 0;
-		for (auto v : buffer) {
-			past->Sig.buf[id++] = v;
-		}
+	} catch (const std::exception& e) {
+		throw exception_etc(*past, pnode, e.what()).raise();
 	}
-	else
-	{
-		vector<float> buffer;
-		count = wav_read_float32(fp, frames2read, wavinfo, buffer, estr);
-		if (!estr.empty()) {
-			fclose(fp);
-			throw exception_etc(*past, pnode, estr).raise();
-		}
-		auto frames = reinterpret_cast<const float(*)[2]>(buffer.data());
-		size_t framesRead = count;
-		past->Sig.next = new CSignals((int)wavinfo.sample_rate);
-		past->Sig.UpdateBuffer((uint64_t)framesRead);
-		past->Sig.next->UpdateBuffer((uint64_t)framesRead);
-		for (size_t k = 0; k < framesRead; ++k) {
-			past->Sig.buf[k] = frames[k][0];
-			past->Sig.next->buf[k] = frames[k][1];
-		}
-	}
-	fclose(fp);
 	//Resampling if the sampling rate is different from the current environment
 	int envFs = past->GetFs();
 	if (envFs != past->Sig.GetFs()) {
@@ -1177,6 +1176,15 @@ static int filetype(const string& fname, string& errstr)
 	return res;
 }
 
+bool is_local_wave_source(const string& path, bool waveOnly)
+{
+	if (is_remote_url(path)) return false;
+	std::error_code ec;
+	if (!std::filesystem::is_regular_file(path, ec)) return false;
+	string err;
+	return waveOnly || filetype(path, err) == 1;
+}
+
 void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
 	string filename = past->Sig.str();
@@ -1215,17 +1223,18 @@ void _file(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 		throw exception_func(*past, pnode, errstr).raise();
 		break;
 	case 1:
-		//as of now Jan 2022, args is empty
-		// supplying default args for _wave()
-		((vector<CVar>*) & args)->push_back(CVar(0.));
-		((vector<CVar>*) & args)->push_back(CVar(-1.));
-		_wave(past, pnode, args);
+		_wave(past, pnode, {CVar(0.), CVar(-1.)});
 		break;
 	case 2:
-		// supplying default args for _mp3()
-		((vector<CVar>*) & args)->push_back(CVar(0.));
-		((vector<CVar>*) & args)->push_back(CVar(-1.));
-		_mp3(past, pnode, args);
+		if (pnode == past->progressiveFileCall) {
+			try {
+				past->prepare_file_audio(open_mp3_reader(filename, 0, true));
+			} catch (const std::exception& e) {
+				throw exception_etc(*past, pnode, e.what()).raise();
+			}
+		} else {
+			_mp3(past, pnode, {CVar(0.), CVar(-1.)});
+		}
 		break;
 	case 3:
 		throw exception_func(*past, pnode, "aiff files are not supported currently in auxe.").raise();

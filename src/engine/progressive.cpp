@@ -1,5 +1,7 @@
 #include "AuxScope.h"
 #include "filter_block.h"
+#include "audio_file_reader.h"
+#include <samplerate.h>
 #include "AuxScope_exception.h"
 #include <atomic>
 #include <chrono>
@@ -9,9 +11,9 @@
 
 // Only the job's worker writes frames. Publication makes all earlier frames
 // visible together. No worker ever owns a pointer to an evaluator or Qt object.
-class FilterOutput final : public auxProgressiveAudio {
+class ProgressiveOutput final : public auxProgressiveAudio {
 public:
-    std::unique_ptr<double[]> frames;
+    std::unique_ptr<double[]> frames, right;
     std::atomic<size_t> count{0};
     std::atomic<bool> stopped{false};
     size_t ready() const override { return count.load(); }
@@ -20,73 +22,239 @@ public:
     const double* samples() const override { return frames.get(); }
 };
 
-class ProgressiveFilterJob {
+const double* aux_progressive_right_samples(const auxProgressiveAudio& source) {
+    auto* output = dynamic_cast<const ProgressiveOutput*>(&source);
+    return output ? output->right.get() : nullptr;
+}
+
+// A frame contains one sample per channel. Both channels of a live source
+// become readable together under the producer's shared ready() count.
+static bool contiguous_real_channels(const CSignals& signal) {
+    if (!signal.nSamples || signal.chain || signal.bufBlockSize != sizeof(double) || signal.IsString())
+        return false;
+    const auto* right = signal.next;
+    return !right || (!right->next && !right->chain && right->bufBlockSize == sizeof(double) &&
+        !right->IsString() && right->GetFs() == signal.GetFs() && right->tmark == signal.tmark &&
+        right->nSamples == signal.nSamples && right->nGroups == signal.nGroups);
+}
+
+class ProgressiveInput {
 public:
-    std::shared_ptr<FilterOutput> out = std::make_shared<FilterOutput>();
-    std::shared_ptr<const auxProgressiveAudio> upstream;
-    std::vector<double> input, num, den, state;
+    explicit ProgressiveInput(const CVar& value) : stream(value.progressive) {
+        if (!stream) {
+            left.assign(value.buf, value.buf + value.nSamples);
+            if (value.next) right.assign(value.next->buf, value.next->buf + value.next->nSamples);
+        }
+    }
+    size_t ready() const { return stream ? stream->ready() : left.size(); }
+    size_t totalFrames() const { return stream ? stream->totalFrames : left.size(); }
+    const double* leftSamples() const { return stream ? stream->samples() : left.data(); }
+    const double* rightSamples() const {
+        return stream ? aux_progressive_right_samples(*stream) : (right.empty() ? nullptr : right.data());
+    }
+    std::shared_ptr<const auxProgressiveAudio> stream;
+private:
+    std::vector<double> left, right;
+};
+
+class ProgressiveAudioJob {
+public:
+    explicit ProgressiveAudioJob(const char* type) : type(type) {
+        static std::atomic<uint64_t> sequence{1};
+        id = sequence++;
+    }
+    std::shared_ptr<ProgressiveOutput> out = std::make_shared<ProgressiveOutput>();
     size_t block = 4096, row = 0, published = 0;
     std::thread worker;
     std::atomic<bool> cancelRequested{false};
-    double id = 0;
+    const char* type;
+    double id;
+    std::string error;
     void cancel() {
         cancelRequested = true;
         if (worker.joinable()) worker.join();
         if (out->ready() < out->totalFrames) out->stopped = true;
     }
-    ~ProgressiveFilterJob() {
-        cancel();
+    virtual ~ProgressiveAudioJob() = default;
+    virtual void step() = 0;
+    void start(CVar& value) {
+        out->frames.reset(new double[out->totalFrames]);
+        while (!out->ready() && !out->finished()) step();
+        value.Reset(out->sampleRate);
+        value.tmark = out->startMs;
+        value.progressive = out;
+        publish(value);
     }
-    void step() {
-        size_t i = out->ready();
-        const size_t available = upstream ? upstream->ready() : input.size();
-        const size_t end = std::min(i + block, available);
-        const double* src = upstream ? upstream->samples() : input.data();
-        filter_block(src+i, out->frames.get()+i, end-i, num, den, state);
-        out->count = end;
-        if (upstream && upstream->canceled() && end == available) out->stopped = true;
+    void run_remaining() {
+        if (!out->finished()) worker = std::thread([this] {
+            try {
+                while (!out->finished() && !cancelRequested.load()) step();
+            } catch (const std::exception& e) {
+                error = e.what();
+                out->stopped = true;
+            }
+        });
     }
-    void run() {
-        while (!out->finished() && !cancelRequested.load()) {
-            if (upstream && upstream->ready() == out->ready() && !upstream->finished())
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            else step();
+    const double* workspaceBuffer[2]{};
+    void publishChannel(CSignals& value, const double* src, size_t end, int channel) {
+        auto& storage = workspaceBuffer[channel];
+        if (published && (!storage || storage != value.buf)) {
+            std::unique_ptr<double[]> buffer(new double[out->totalFrames]);
+            std::copy_n(src, published, buffer.get());
+            value.body::Reset();
+            value.buf = buffer.release();
+            storage = value.buf;
         }
+        if (storage) value.nSamples = end;
+        else value.UpdateBuffer(end);
+        value.bufType = 'R';
+        if (end > published) std::copy(src+published, src+end, value.buf+published);
     }
-    const double* workspaceBuffer = nullptr;
     void publish(CVar& value) {
         const auto end = out->ready();
-        // Reserve address space once in the bound workspace variable. Touch
-        // only the suffix actually published. The launch preview stays small.
-        if (published && (!workspaceBuffer || workspaceBuffer != value.buf)) {
-            std::unique_ptr<double[]> storage(new double[out->totalFrames]);
-            std::copy_n(out->samples(), published, storage.get());
-            value.body::Reset();
-            value.buf = storage.release();
-            workspaceBuffer = value.buf;
+        publishChannel(value, out->samples(), end, 0);
+        if (out->right) {
+            if (!value.next) value.next = new CSignals(out->sampleRate);
+            value.next->tmark = value.tmark;
+            publishChannel(*value.next, out->right.get(), end, 1);
         }
-        if (workspaceBuffer) value.nSamples = end;
-        else value.UpdateBuffer(end);
-        std::copy(out->samples()+published, out->samples()+end, value.buf+published);
-        if (row) value.nGroups = std::max<size_t>(1, end/row);
+        if (row) {
+            value.nGroups = std::max<size_t>(1, end/row);
+            if (value.next) value.next->nGroups = value.nGroups;
+        }
         describe(value.strut["h"], end);
         published = end;
     }
     void describe(CVar& h, size_t end) const {
-        h.strut["status"].SetString(out->canceled() ? "canceled" : end == out->totalFrames ? "done" : "running");
-        h.strut["progress"].SetValue(100.0*end/out->totalFrames);
+        bool stopped = out->canceled();
+        h.strut["status"].SetString(stopped ? (error.empty() ? "canceled" : "error") :
+            end == out->totalFrames ? "done" : "running");
+        h.strut["progress"].SetValue(out->totalFrames ? 100.0*end/out->totalFrames : 100.0);
         h.strut["completed"].SetValue(end);
         h.strut["id"].SetValue(id);
-        h.strut["type"].SetString("progressive_filter");
-        h.strut["error"].SetString("");
+        h.strut["type"].SetString(type);
+        h.strut["error"].SetString(stopped ? error.c_str() : "");
         const size_t last = end ? ((end-1)/block)*block : 0;
         auto& tail = h.strut["block"];
         tail.Reset(out->sampleRate);
         tail.tmark = out->sampleRate > 1 ? out->startMs + 1000.0*last/out->sampleRate : 0;
         tail.UpdateBuffer(end-last);
-        std::copy(out->samples()+last,out->samples()+end,tail.buf);
+        if (end > last) std::copy(out->samples()+last,out->samples()+end,tail.buf);
+        if (out->right) {
+            tail.next = new CSignals(out->sampleRate);
+            tail.next->tmark = tail.tmark;
+            tail.next->UpdateBuffer(end-last);
+            if (end > last) std::copy(out->right.get()+last, out->right.get()+end, tail.next->buf);
+        }
     }
 };
+
+class ProgressiveFilterJob final : public ProgressiveAudioJob {
+public:
+    explicit ProgressiveFilterJob(const CVar& source)
+        : ProgressiveAudioJob("progressive_filter"), input(source) {}
+    ~ProgressiveFilterJob() override { cancel(); }
+    ProgressiveInput input;
+    std::vector<double> num, den, state, rightState;
+    void step() override {
+        size_t i = out->ready();
+        const size_t available = input.ready();
+        if (input.stream && available == i && !input.stream->finished()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return;
+        }
+        const size_t end = std::min(i + block, available);
+        filter_block(input.leftSamples()+i, out->frames.get()+i, end-i, num, den, state);
+        if (out->right)
+            filter_block(input.rightSamples()+i, out->right.get()+i, end-i, num, den, rightState);
+        out->count = end;
+        if (input.stream && input.stream->canceled() && end == input.ready()) out->stopped = true;
+    }
+};
+
+// Keep a single decoder and converter across input blocks so range boundaries,
+// stereo alignment and the sinc filter history match a single synchronous read.
+class FileAudioJob final : public ProgressiveAudioJob {
+public:
+    FileAudioJob(AudioFileReader source, int fs)
+        : ProgressiveAudioJob("progressive_file"), reader(std::move(source)) {
+        out->sampleRate = fs;
+        ratio = 1.0 / (static_cast<float>(reader.sampleRate) / fs);
+        if (!src_is_valid_ratio(ratio)) throw std::runtime_error("Unsupported file sample-rate ratio.");
+        double frames = std::round(reader.frames * ratio);
+        if (frames > body::maxBufferBytes / sizeof(double))
+            throw std::length_error("Requested signal size is too large.");
+        out->totalFrames = static_cast<size_t>(frames);
+        if (reader.channels == 2) out->right.reset(new double[out->totalFrames]);
+        if (reader.sampleRate != fs) {
+            int error = 0;
+            converter.reset(src_new(SRC_SINC_MEDIUM_QUALITY, reader.channels, &error));
+            if (!converter) throw std::runtime_error(src_strerror(error));
+            inputBlock = std::min(block, static_cast<size_t>(std::max(1.0, block / ratio)));
+            converted.resize(block * reader.channels);
+        }
+    }
+    ~FileAudioJob() override { cancel(); }
+
+    void step() override {
+        const size_t want = std::min(inputBlock, reader.frames - consumed);
+        if (reader.read(want, input) != want)
+            throw std::runtime_error("Audio file ended before its declared frame count.");
+        consumed += want;
+        if (!converter) {
+            append(input.data(), want);
+            return;
+        }
+        SRC_DATA data{};
+        data.src_ratio = ratio;
+        data.end_of_input = consumed == reader.frames;
+        data.data_in = input.data();
+        data.input_frames = want;
+        data.data_out = converted.data();
+        data.output_frames = block;
+        do {
+            int error = src_process(converter.get(), &data);
+            if (error) throw std::runtime_error(src_strerror(error));
+            append(converted.data(), data.output_frames_gen);
+            data.input_frames -= data.input_frames_used;
+            data.data_in += data.input_frames_used;
+        } while (data.input_frames || (data.end_of_input && data.output_frames_gen == data.output_frames));
+        if (data.end_of_input && out->ready() < out->totalFrames) {
+            // The ordinary resampler zero-pads to the rounded output length.
+            auto pos = out->ready();
+            std::fill(out->frames.get()+pos, out->frames.get()+out->totalFrames, 0.0);
+            if (out->right) std::fill(out->right.get()+pos, out->right.get()+out->totalFrames, 0.0);
+            out->count = out->totalFrames;
+        }
+    }
+private:
+    void append(const float* data, size_t frames) {
+        size_t pos = out->ready();
+        frames = std::min(frames, out->totalFrames - pos);
+        for (size_t i = 0; i < frames; ++i) {
+            out->frames[pos+i] = *data++;
+            if (out->right) out->right[pos+i] = *data++;
+        }
+        out->count = pos + frames;
+    }
+    AudioFileReader reader;
+    std::unique_ptr<SRC_STATE, decltype(&src_delete)> converter{nullptr, src_delete};
+    std::vector<float> input, converted;
+    double ratio;
+    size_t consumed = 0, inputBlock = 4096;
+};
+
+void AuxScope::prepare_file_audio(AudioFileReader reader) {
+    auto job = std::make_shared<FileAudioJob>(std::move(reader), GetFs());
+    job->start(Sig);
+    preparedFileJob = std::move(job);
+}
+
+void AuxScope::bind_progressive_job(const string& name, std::shared_ptr<ProgressiveAudioJob> job) {
+    if (progressiveJobs.count(name)) publish_progressive();
+    job->run_remaining();
+    progressiveJobs[name] = std::move(job);
+}
 
 CVar* AuxScope::try_start_progressive(const AstNode* lhs, const AstNode* rhs) {
     auto fail = [&](const char* msg) { throw exception_etc(*this, rhs, msg).raise(); };
@@ -101,6 +269,28 @@ CVar* AuxScope::try_start_progressive(const AstNode* lhs, const AstNode* rhs) {
     if (!(args && args->type == N_ARGS) && function->type != N_CALL &&
         !(function->suppress & AST_FLAG_EXPLICIT_ZERO_ARG_CALL))
         return nullptr;
+    if (function == rhs && (!strcmp(function->str, "wave") || !strcmp(function->str, "file"))) {
+        // Prime an immediately usable prefix for a simple local WAV. Downloads,
+        // MP3 frame counting and computed paths use the deferred evaluator.
+        const AstNode* path = args ? args->child : nullptr;
+        std::string filename;
+        if (path && !path->alt) {
+            if (path->type == T_STRING) filename = path->str;
+            else if (path->type == T_ID) {
+                auto it = Vars.find(path->str);
+                if (it != Vars.end() && it->second.IsString()) filename = it->second.str();
+            }
+        }
+        if (filename.empty() || !is_local_wave_source(filename, !strcmp(function->str, "wave")))
+            return start_deferred(lhs, rhs, true);
+        progressiveFileCall = rhs;
+        try { Compute(rhs); }
+        catch (...) { progressiveFileCall = nullptr; preparedFileJob.reset(); throw; }
+        progressiveFileCall = nullptr;
+        SetVar(lhs->str, &Sig);
+        if (preparedFileJob) bind_progressive_job(lhs->str, std::move(preparedFileJob));
+        return &Sig;
+    }
     if (function == rhs && !strcmp(function->str, "progblocks")) {
         if (!args) fail("Use progblocks(audio, window_ms, callback_name[, arguments...]).");
         return start_reducer(lhs, args);
@@ -120,18 +310,14 @@ CVar* AuxScope::try_start_progressive(const AstNode* lhs, const AstNode* rhs) {
         if (it != Vars.end()) source = &it->second;
     }
     if (!source || !coeff) fail("Progressive assignment supports x.filt(b[, a[, state]]) on a signal variable.");
-    if (!source->nSamples || source->next || source->chain || source->bufBlockSize != sizeof(double) ||
-        source->IsString() || (source->GetFs()!=1 && source->GetFs()<=500))
-        fail("Progressive filt requires a contiguous real mono signal or vector.");
-    auto job = std::make_shared<ProgressiveFilterJob>();
-    static std::atomic<uint64_t> sequence{1};
-    job->id = sequence++;
+    const bool audio = source->GetFs() > 500;
+    if (!contiguous_real_channels(*source) || (!audio && (source->GetFs() != 1 || source->next)))
+        fail("Progressive filt requires a contiguous real vector or aligned mono or stereo audio.");
+    auto job = std::make_shared<ProgressiveFilterJob>(*source);
     job->out->sampleRate = source->GetFs();
     job->out->startMs = source->tmark;
-    job->upstream = source->progressive;
-    if (!job->upstream) job->input.assign(source->buf, source->buf + source->nSamples);
-    job->out->totalFrames = job->upstream ? job->upstream->totalFrames : source->nSamples;
-    job->row = job->upstream ? job->upstream->rowFrames : (source->nGroups > 1 ? source->Len() : 0);
+    job->out->totalFrames = job->input.totalFrames();
+    job->row = job->input.stream ? job->input.stream->rowFrames : (source->nGroups > 1 ? source->Len() : 0);
     job->out->rowFrames = job->row;
     if (job->row) job->block = job->row;
     job->den = {1};
@@ -148,16 +334,13 @@ CVar* AuxScope::try_start_progressive(const AstNode* lhs, const AstNode* rhs) {
     size_t order = std::max(job->num.size(),job->den.size())-1;
     if (job->state.size() > order) fail("Filter state exceeds filter order.");
     job->state.resize(order);
-    job->out->frames.reset(new double[job->out->totalFrames]);
-    job->step();
-    Sig.Reset(job->out->sampleRate);
-    Sig.tmark = job->out->startMs;
-    Sig.progressive = job->out;
-    job->publish(Sig);
-    if (!job->out->finished()) job->worker = std::thread(&ProgressiveFilterJob::run, job.get());
+    if (job->input.rightSamples()) {
+        job->rightState = job->state;
+        job->out->right.reset(new double[job->out->totalFrames]);
+    }
+    job->start(Sig);
     SetVar(lhs->str,&Sig);
-    if (progressiveJobs.count(lhs->str)) publish_progressive();
-    progressiveJobs[lhs->str] = job;
+    bind_progressive_job(lhs->str, job);
     return &Sig;
 }
 
@@ -166,7 +349,7 @@ static void syncHandle(CVar& value, const CVar& handle) {
     const auto type = value.strut.find("type");
     const auto id = value.strut.find("id");
     if (type != value.strut.end() && type->second.IsString() &&
-        type->second.str() == "progressive_filter" && id != value.strut.end() &&
+        type->second.str() == handle.strut.at("type").str() && id != value.strut.end() &&
         id->second.value() == handle.strut.at("id").value()) {
         value = handle;
         return;
@@ -178,7 +361,7 @@ static void syncHandle(CVar& value, const CVar& handle) {
 bool AuxScope::cancel_progressive(const CVar& handle) {
     auto type = handle.strut.find("type");
     if (type == handle.strut.end() || !type->second.IsString() ||
-        type->second.str() != "progressive_filter" || !handle.strut.count("id")) return false;
+        (type->second.str() != "progressive_filter" && type->second.str() != "progressive_file") || !handle.strut.count("id")) return false;
     for (auto& entry : progressiveJobs)
         if (entry.second->id == handle.strut.at("id").value()) entry.second->cancel();
     publish_progressive();
@@ -199,13 +382,14 @@ int AuxScope::publish_progressive() {
             it = progressiveJobs.erase(it);
             continue;
         }
-        if (job.published != job.out->ready() || job.out->canceled()) {
+        const bool stopped = job.out->canceled();
+        if (job.published != job.out->ready() || stopped) {
             job.publish(var->second);
             const auto& handle = var->second.strut.at("h");
             for (auto& v : Vars) if (&v.second != &var->second) syncHandle(v.second, handle);
             ++changed;
         }
-        if (job.published == job.out->totalFrames || job.out->canceled()) it = progressiveJobs.erase(it);
+        if (job.published == job.out->totalFrames || stopped) it = progressiveJobs.erase(it);
         else ++it;
     }
     return changed;
@@ -215,77 +399,93 @@ int AuxScope::publish_progressive() {
 // independent of both source publication blocks and screen refreshes.
 class BlockReducer {
 public:
-    explicit BlockReducer(EngineRuntime* env) : frame(env) {}
+    BlockReducer(EngineRuntime* env, const CVar& src) : frame(env), input(src) {}
     ~BlockReducer() {
         if (output && !output->finished()) output->stopped = true;
         if (frame.node) yydeleteAstNode(frame.node, 0);
         frame.node = nullptr;
     }
     AuxScope frame;
-    std::shared_ptr<const auxProgressiveAudio> source;
-    std::shared_ptr<FilterOutput> output;
-    std::vector<double> input;
+    ProgressiveInput input;
+    std::shared_ptr<ProgressiveOutput> output;
     size_t cursor = 0, windowIndex = 0;
     double windowFrames = 0, origin = 0;
     int fs = 0;
     double id = 0;
 
-    void publish_audio(CVar& handle) {
-        auto flag = handle.strut.find("stream");
-        if (!output && (flag == handle.strut.end() || !ISSCALARG(flag->second.type()) || flag->second.value() == 0))
+    void publish_audio(const CVar& acc, size_t end) {
+        const auto handle = acc.strut.find("h");
+        if (handle == acc.strut.end()) {
+            if (output) throw std::runtime_error("A streaming callback must publish h.completed audio for every block.");
             return;
-        auto item = handle.strut.find("completed");
-        if (item == handle.strut.end())
-            throw std::runtime_error("A streaming callback must publish h.completed audio for every block.");
-        CVar& audio = item->second;
-        const size_t capacity = source ? source->totalFrames : input.size();
-        if (audio.GetFs() != fs || audio.next || audio.chain || audio.bufBlockSize != sizeof(double) ||
-            audio.nSamples != cursor || audio.nSamples > capacity)
-            throw std::runtime_error("h.completed must be contiguous mono audio with one output sample per processed input sample and the same sample rate.");
-        if (!output) {
-            output = std::make_shared<FilterOutput>();
-            output->totalFrames = capacity;
-            output->sampleRate = fs;
-            output->startMs = origin;
-            output->frames.reset(new double[capacity]);
         }
+        const auto& members = handle->second.strut;
+        auto flag = members.find("stream");
+        if (!output && (flag == members.end() || !ISSCALARG(flag->second.type()) || flag->second.value() == 0))
+            return;
+        auto item = members.find("completed");
+        if (item == members.end())
+            throw std::runtime_error("A streaming callback must publish h.completed audio for every block.");
+        const CVar& audio = item->second;
+        const size_t capacity = input.totalFrames();
+        if (!contiguous_real_channels(audio) || audio.GetFs() != fs ||
+            audio.nSamples != end || end > capacity)
+            throw std::runtime_error("h.completed must be aligned mono or stereo audio with one frame per processed input frame at the source sample rate.");
+        if (!output) {
+            auto stream = std::make_shared<ProgressiveOutput>();
+            stream->totalFrames = capacity;
+            stream->sampleRate = fs;
+            stream->startMs = origin;
+            stream->frames.reset(new double[capacity]);
+            if (audio.next) stream->right.reset(new double[capacity]);
+            output = std::move(stream);
+        }
+        if (bool(output->right) != bool(audio.next))
+            throw std::runtime_error("A streaming callback must preserve its output channel count.");
         const size_t previous = output->ready();
-        if (previous > cursor || (previous && std::memcmp(output->samples(), audio.buf, previous * sizeof(double)) != 0))
+        if (previous > end || std::memcmp(output->samples(), audio.buf, previous * sizeof(double)) ||
+            (audio.next && std::memcmp(output->right.get(), audio.next->buf, previous * sizeof(double))))
             throw std::runtime_error("A streaming callback must preserve all previously published samples.");
-        std::copy(audio.buf + previous, audio.buf + cursor, output->frames.get() + previous);
-        output->count = cursor;
-        audio.progressive = output;
+        std::copy(audio.buf + previous, audio.buf + end, output->frames.get() + previous);
+        if (audio.next)
+            std::copy(audio.next->buf + previous, audio.next->buf + end, output->right.get() + previous);
+        output->count = end;
     }
 
     bool advance(CVar& dest) {
-        const size_t limit = source ? source->ready() : input.size();
-        const bool terminal = !source || (source->finished() && limit == source->ready());
-        const double* data = source ? source->samples() : input.data();
-        // A callback may do substantial interpreted DSP work. Yield after each
-        // window so the frontend can publish progress and process input.
-        for (int budget = 1; cursor < limit && budget > 0; --budget) {
+        const size_t limit = input.ready();
+        const bool terminal = !input.stream || (input.stream->finished() && limit == input.ready());
+        // Run one callback per poll so the frontend can publish between windows.
+        if (cursor < limit) {
             size_t end = std::max(cursor+1, static_cast<size_t>(std::llround((windowIndex+1)*windowFrames)));
-            if (end > limit && !terminal) break;
+            if (end > limit && !terminal) return false;
             end = std::min(end, limit);
             CVar& block = frame.Vars["chunk"];
             block.Reset(fs);
             block.UpdateBuffer(end-cursor);
-            std::copy(data+cursor,data+end,block.buf);
+            std::copy(input.leftSamples()+cursor, input.leftSamples()+end, block.buf);
+            if (const double* right = input.rightSamples()) {
+                block.next = new CSignals(fs);
+                block.next->UpdateBuffer(end-cursor);
+                std::copy(right+cursor, right+end, block.next->buf);
+            }
             frame.Vars["timestamp"].SetValue(origin + 1000.0*cursor/fs);
             frame.Vars["first"].SetValue(windowIndex == 0);
             frame.Compute();
+            const CVar& acc = frame.Vars.at("acc");
+            publish_audio(acc, end);
+            dest = acc;
+            if (output) dest.strut.at("h").strut.at("completed").progressive = output;
             cursor = end;
             ++windowIndex;
         }
-        dest = frame.Vars["acc"];
         auto& handle = dest.strut["h"];
-        publish_audio(handle);
         handle.strut["id"].SetValue(id);
         handle.strut["type"].SetString("progressive_reducer");
         handle.strut["samples_completed"].SetValue(cursor);
         bool done = terminal && cursor == limit;
         if (done && output && cursor < output->totalFrames) output->stopped = true;
-        handle.strut["status"].SetString(done ? (source && source->canceled() ? "canceled" : "done") : "running");
+        handle.strut["status"].SetString(done ? (input.stream && input.stream->canceled() ? "canceled" : "done") : "running");
         return done;
     }
 };
@@ -296,11 +496,9 @@ CVar* AuxScope::start_reducer(const AstNode* lhs, const AstNode* call) {
     if (!arg || !arg->next || !arg->next->next)
         fail("Use progblocks(audio, window_ms, callback_name[, arguments...]).");
     CVar src = *Compute(arg);
-    if (src.GetFs() <= 500 || !src.nSamples || src.chain || src.next || src.bufBlockSize != sizeof(double))
-        fail("progblocks requires contiguous real mono audio.");
-    auto job = std::make_shared<BlockReducer>(pEnv);
-    job->source = src.progressive;
-    if (!job->source) job->input.assign(src.buf,src.buf+src.nSamples);
+    if (src.GetFs() <= 500 || !contiguous_real_channels(src))
+        fail("progblocks requires contiguous real mono or aligned stereo audio.");
+    auto job = std::make_shared<BlockReducer>(pEnv, src);
     job->fs = src.GetFs();
     job->origin = src.tmark;
     CVar duration = *Compute(arg = arg->next);
@@ -354,7 +552,6 @@ int AuxScope::publish_reducers() {
         catch (const std::exception& e) { error = e.what(); }
         catch (const char* msg) { error = msg ? msg : "Callback failed"; }
         if (!error.empty()) {
-            if (job.cursor) var->second = job.frame.Vars["acc"];
             auto& h = var->second.strut["h"];
             h.strut["id"].SetValue(job.id);
             h.strut["type"].SetString("progressive_reducer");

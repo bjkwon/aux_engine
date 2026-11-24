@@ -384,19 +384,23 @@ public:
 	int channelWriteSel = 0; // 0=whole object, 1=.left-scoped, 2=.right-scoped write target (set by get_available_struct_item, consumed by insertreplace)
 	CVar* process_statement(const AstNode* pnode);
 	int drain_async_jobs(bool& filterUpdatesOnly);
-    CVar* start_deferred(const AstNode* lhs, const AstNode* rhs);
+    CVar* start_deferred(const AstNode* lhs, const AstNode* rhs, bool progressiveFile = false);
     int publish_deferred();
     static bool apply_handle_members(CVar& value, uint64_t id, const map<string, double>& members);
     void remember_deferred_handle_members(uint64_t id, const map<string, double>& members);
     void forget_assignment(const string& name);
     std::vector<std::shared_ptr<class DeferredAssignment>> deferredJobs;
     CVar* try_start_progressive(const AstNode* lhs, const AstNode* rhs);
+    const AstNode* progressiveFileCall = nullptr;
+    std::shared_ptr<class ProgressiveAudioJob> preparedFileJob;
+    void prepare_file_audio(struct AudioFileReader reader);
+    void bind_progressive_job(const string& name, std::shared_ptr<class ProgressiveAudioJob> job);
     int publish_progressive();
     bool cancel_progressive(const CVar& handle);
     CVar* start_reducer(const AstNode* lhs, const AstNode* args);
     int publish_reducers();
     std::map<string, std::shared_ptr<class BlockReducer>> reducers;
-    std::map<string, std::shared_ptr<class ProgressiveFilterJob>> progressiveJobs;
+    std::map<string, std::shared_ptr<class ProgressiveAudioJob>> progressiveJobs;
 
 	bool fBreak;
 	bool fContinue;

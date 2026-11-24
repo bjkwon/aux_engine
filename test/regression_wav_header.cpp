@@ -7,7 +7,9 @@
 
 #include <auxe/auxe.h>
 
+#include <chrono>
 #include <cmath>
+#include <thread>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -107,6 +109,114 @@ bool write_bytes(const fs::path& p, const std::vector<uint8_t>& bytes, std::stri
   fwrite(bytes.data(), 1, bytes.size(), fp);
   fclose(fp);
   return true;
+}
+
+// Exercise both assignment entry points, including conversion across block
+// boundaries and snapshots taken before the evaluator polls the worker.
+bool case_progressive_audio_files(std::string& err) {
+  Session s("progressive");
+  if (!s.ok()) { err = s.err; return false; }
+  auto eval = [&](const std::string& cmd) {
+    std::string preview;
+    if (!aux_eval(&s.ctx, cmd, s.cfg, preview)) return true;
+    err = cmd + " failed: " + preview;
+    return false;
+  };
+  for (int rate : {22050, 16000, 48000}) {
+    for (int channels : {1, 2}) {
+      auto path = s.dir / "audio.dat";  // file() must sniff the contents.
+      if (!write_bytes(path, make_wav(channels, rate, 50003, 0, 0), err) ||
+          !eval("path=\"" + path.generic_string() + "\"")) return false;
+      for (const std::string call : {"file(path)", "wave(path,12.5,800)", "wave(path,900,10)"}) {
+        if (!eval("ref=" + call) || !eval("live <- " + call) || !eval("snap=live")) return false;
+        auto value = aux_get_var(s.ctx, "live");
+        auto stream = aux_progressive_audio(value);
+        if (!stream || aux_progressive_audio(aux_get_var(s.ctx, "snap"))) {
+          err = "Expected live audio and a detached snapshot: " + call;
+          return false;
+        }
+        size_t n = aux_flatten_channel_length(aux_get_var(s.ctx, "ref"), 0);
+        size_t prefix = aux_flatten_channel_length(aux_get_var(s.ctx, "snap"), 0);
+        if (n && (!prefix || prefix >= n)) { err = "First publication was not a prefix"; return false; }
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!stream->finished() && std::chrono::steady_clock::now() < deadline) {
+          aux_poll_async(s.ctx);
+          std::this_thread::yield();
+        }
+        aux_poll_async(s.ctx);
+        if (stream->ready() != n || stream->totalFrames != n || stream->canceled() ||
+            (aux_progressive_right_samples(*stream) != nullptr) != (channels == 2) ||
+            aux_flatten_channel_length(aux_get_var(s.ctx, "snap"), 0) != prefix) {
+          err = "Wrong final stream dimensions or snapshot: " + call + " at " + std::to_string(rate);
+          return false;
+        }
+        for (int ch = 0; ch < channels && n; ++ch) {
+          std::vector<double> expected(n), actual(n);
+          auto* samples = ch ? aux_progressive_right_samples(*stream) : stream->samples();
+          if (aux_flatten_channel(aux_get_var(s.ctx, "ref"), ch, expected.data(), n) != n ||
+              aux_flatten_channel(value, ch, actual.data(), n) != n ||
+              expected != actual || !std::equal(actual.begin(), actual.end(), samples)) {
+            err = "Decoded samples differ: " + call + " at " + std::to_string(rate)
+                + " Hz, channel " + std::to_string(ch);
+            return false;
+          }
+        }
+      }
+    }
+  }
+  // stop() can race completion. Either terminal state must retain a stable
+  // prefix, and reassignment must not be overwritten by a later publication.
+  if (!eval("live <- file(path)") || !eval("saved=live.h") || !eval("stop(saved)")) return false;
+  auto stopped = aux_progressive_audio(aux_get_var(s.ctx, "live"));
+  if (!stopped || !stopped->finished() ||
+      aux_flatten_channel_length(aux_get_var(s.ctx, "live"), 1) != stopped->ready()) {
+    err = "Stopped file read did not retain its final stereo prefix";
+    return false;
+  }
+  if (!eval("live <- wave(path)") || !eval("live=17")) return false;
+  aux_poll_async(s.ctx);
+  double replacement = 0;
+  if (aux_copy_vector(aux_get_var(s.ctx, "live"), &replacement, 1) != 1 || replacement != 17) {
+    err = "File decoder overwrote a newer assignment";
+    return false;
+  }
+  return true;
+}
+
+// MPEG-1 Layer III, 128 kbps, 44.1 kHz stereo, no padding. Zero side
+// information and zero spectral data encode silence without a fixture codec.
+bool case_progressive_mp3(std::string& err) {
+  Session s("progressive_mp3");
+  if (!s.ok()) { err = s.err; return false; }
+  constexpr int frameBytes = 417, frameCount = 40;
+  std::vector<uint8_t> bytes(frameBytes * frameCount);
+  for (int i = 0; i < frameCount; ++i) {
+    bytes[i * frameBytes] = 0xff;
+    bytes[i * frameBytes + 1] = 0xfb;
+    bytes[i * frameBytes + 2] = 0x90;
+  }
+  auto path = s.dir / "mpeg.dat";
+  if (!write_bytes(path, bytes, err)) return false;
+  std::string preview;
+  auto call = "file(\"" + path.generic_string() + "\")";
+  if (aux_eval(&s.ctx, "ref=" + call, s.cfg, preview) ||
+      aux_eval(&s.ctx, "live <- " + call, s.cfg, preview)) {
+    err = preview;
+    return false;
+  }
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  auto expected = aux_flatten_channel_length(aux_get_var(s.ctx, "ref"), 0);
+  do {
+    aux_poll_async(s.ctx);
+    auto live = aux_get_var(s.ctx, "live");
+    auto stream = aux_progressive_audio(live);
+    if (expected && stream && stream->finished() && !stream->canceled() &&
+        stream->ready() == expected && aux_progressive_right_samples(*stream) &&
+        aux_flatten_channel_length(live, 1) == expected) return true;
+    std::this_thread::yield();
+  } while (std::chrono::steady_clock::now() < deadline);
+  err = "Progressive MP3 did not publish the expected stereo audio.";
+  return false;
 }
 
 // A well-formed wav still loads, with the expected number of samples.
@@ -657,6 +767,8 @@ int main() {
     bool (*fn)(std::string&);
   };
   const TestCase tests[] = {
+      {"case_progressive_mp3", case_progressive_mp3},
+      {"case_progressive_audio_files", case_progressive_audio_files},
       {"case_valid_wav_loads", case_valid_wav_loads},
       {"case_oversized_data_chunk", case_oversized_data_chunk},
       {"case_zero_block_align", case_zero_block_align},

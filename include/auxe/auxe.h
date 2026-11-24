@@ -32,7 +32,7 @@ typedef struct auxContext auxContext;
 struct _AuxObj;
 using AuxObj = const _AuxObj*;
 
-// Retained mono frames. The prefix [0, ready()) is immutable and safe to
+// Retained first-channel frames. The prefix [0, ready()) is immutable and safe to
 // read on an audio thread for the lifetime of the shared reference.
 struct auxProgressiveAudio {
     virtual ~auxProgressiveAudio() = default;
@@ -46,6 +46,9 @@ struct auxProgressiveAudio {
     double startMs = 0;
 };
 AUXE_API std::shared_ptr<const auxProgressiveAudio> aux_progressive_audio(AuxObj object);
+
+// The right channel shares the same published prefix and lifetime. Null for mono.
+AUXE_API const double* aux_progressive_right_samples(const auxProgressiveAudio& source);
 
 static constexpr uint32_t AUXE_NATIVE_MODULE_ABI_VERSION = 1;
 

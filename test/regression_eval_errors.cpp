@@ -1464,6 +1464,102 @@ static bool case_progressive_filter_and_replay(std::string& err) {
   return true;
 }
 
+static bool case_progressive_stereo(std::string& err) {
+  Session s("case_progressive_stereo");
+  if (!s.ok()) { err = s.err; return false; }
+  auto eval = [&](const std::string& cmd) { return expect_eval_ok(s, cmd, cmd); };
+  if (!write_file(s.dir / "streamstereo.aux",
+                  "function out=streamstereo(chunk,t,prior,first)\n"
+                  "if first\n out.clean=chunk\nelse\n out=prior\n out.clean ++= chunk\nend\n"
+                  "out.h.stream=1\nout.h.completed=out.clean\nout.last_timestamp=t\n", s.err) ||
+      !define_register(s, "streamstereo") ||
+      !eval("x=[tone(137,731); tone(271,731)@-9]") ||
+      !eval("groups=x.group(9)") ||
+      !eval("b=[.5 .2]; a=[1 -.3]; init=.125") ||
+      !eval("refL=filt(groups.left,b,a,init); refR=filt(groups.right,b,a,init)") ||
+      !eval("y <- groups.filt(b,a,init); z <- filt(y,1)") ||
+      !eval("snap=y; result <- progblocks(z,37,\"streamstereo\")") ||
+      !eval("whole <- progblocks(x,37,\"streamstereo\")")) {
+    err = s.err; return false;
+  }
+  const auto* grouped = reinterpret_cast<const CVar*>(aux_get_var(s.ctx,"groups"));
+  const auto* snap = reinterpret_cast<const CVar*>(aux_get_var(s.ctx,"snap"));
+  const size_t frames = grouped->nSamples, row = grouped->Len();
+  if (!grouped->next || grouped->nGroups != 9 || !snap->next || snap->progressive ||
+      snap->nSamples != row || snap->next->nSamples != row) {
+    err = "Expected a detached stereo snapshot of the first group"; return false;
+  }
+  aux_poll_async(s.ctx);
+  auto completed = [&](const char* var) {
+    auto handle = aux_get_struct_member(aux_get_var(s.ctx,var),"h");
+    return aux_get_struct_member(handle,"completed");
+  };
+  auto replay = aux_progressive_audio(completed("result"));
+  if (!replay || !aux_progressive_right_samples(*replay) || replay->finished() || !replay->ready()) {
+    auto* h = reinterpret_cast<const CVar*>(aux_get_struct_member(aux_get_var(s.ctx,"result"),"h"));
+    err = "First callback did not expose a growing stereo stream: " +
+        (h->strut.count("error") ? h->strut.at("error").str() : h->strut.at("status").str());
+    return false;
+  }
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline) {
+    aux_poll_async(s.ctx);
+    auto complete = aux_progressive_audio(completed("whole"));
+    if (replay->finished() && complete && complete->finished()) break;
+    std::this_thread::yield();
+  }
+  auto filtered = reinterpret_cast<const CVar*>(aux_get_var(s.ctx,"z"));
+  auto referenceL = reinterpret_cast<const CVar*>(aux_get_var(s.ctx,"refL"));
+  auto referenceR = reinterpret_cast<const CVar*>(aux_get_var(s.ctx,"refR"));
+  if (!filtered->next || filtered->nGroups != 9 || filtered->next->nGroups != 9 ||
+      filtered->nSamples != frames || filtered->next->nSamples != frames ||
+      replay->ready() != frames || replay->canceled() ||
+      referenceL->nSamples != frames || referenceR->nSamples != frames ||
+      !std::equal(referenceL->buf, referenceL->buf+frames, filtered->buf) ||
+      !std::equal(referenceR->buf, referenceR->buf+frames, filtered->next->buf) ||
+      !std::equal(filtered->buf, filtered->buf+frames, replay->samples()) ||
+      !std::equal(filtered->next->buf, filtered->next->buf+frames, aux_progressive_right_samples(*replay))) {
+    err = "Stereo filter or callback output differs from the independent grouped channel filters"; return false;
+  }
+  auto source = reinterpret_cast<const CVar*>(aux_get_var(s.ctx,"x"));
+  auto whole = aux_progressive_audio(completed("whole"));
+  if (!whole || !aux_progressive_right_samples(*whole) || whole->ready() != source->nSamples ||
+      !std::equal(source->buf, source->buf+source->nSamples, whole->samples()) ||
+      !std::equal(source->next->buf, source->next->buf+source->nSamples, aux_progressive_right_samples(*whole)) ||
+      !eval("count=result.h.samples_completed") || !expect_scalar_value(s,"count",frames)) {
+    err = "Stereo callback lost samples or counted channels twice: " + s.err; return false;
+  }
+  // A callback can select its output channels. Once the first stereo block
+  // is visible, a later callback cannot drop a channel or rewrite its prefix.
+  for (const std::string edit : {"out.clean=out.clean.left", "out.clean.right(1)=123"}) {
+    const bool dropsChannel = edit == "out.clean=out.clean.left";
+    const std::string name = dropsChannel ? "dropchannel" : "rewriteprefix";
+    if (!write_file(s.dir / (name + ".aux"),
+                    "function out=" + name + "(chunk,t,prior,first)\n"
+                    "if first\n out.clean=chunk\nelse\n out=prior\n out.clean ++= chunk\n " + edit +
+                    "\nend\nout.h.stream=1\nout.h.completed=out.clean\n", s.err) ||
+        !define_register(s, name) || !eval("bad <- progblocks(x,37,\"" + name + "\")")) {
+      err = s.err; return false;
+    }
+    aux_poll_async(s.ctx);
+    auto retained = aux_progressive_audio(completed("bad"));
+    if (!retained || !aux_progressive_right_samples(*retained)) {
+      err = "Missing first stereo callback block"; return false;
+    }
+    const size_t before = retained->ready();
+    aux_poll_async(s.ctx);
+    auto handle = reinterpret_cast<const CVar*>(aux_get_struct_member(aux_get_var(s.ctx,"bad"),"h"));
+    const std::string expectedError = dropsChannel ? "channel count" : "previously published samples";
+    if (handle->strut.at("status").str() != "error" ||
+        handle->strut.at("error").str().find(expectedError) == std::string::npos || !retained->canceled() ||
+        retained->ready() != before || aux_progressive_audio(completed("bad")) != retained ||
+        handle->strut.at("samples_completed").value() != before) {
+      err = "Invalid stereo callback failed to preserve the last published block"; return false;
+    }
+  }
+  return true;
+}
+
 static bool case_streamplay_source(std::string& err) {
   Session s("case_streamplay_source");
   if (!s.ok()) { err = s.err; return false; }
@@ -1646,6 +1742,7 @@ int main() {
     {"case_late_deferred_completion", case_late_deferred_completion},
     {"case_deferred_assignment", case_deferred_assignment},
     {"case_streamplay_source", case_streamplay_source},
+    {"case_progressive_stereo", case_progressive_stereo},
     {"case_progressive_filter_and_replay", case_progressive_filter_and_replay},
     {"case_progressive_assignment_rejected_without_side_effect", case_progressive_assignment_rejected_without_side_effect},
     {"case_class_internal_tag_hidden_from_preview_and_members", case_class_internal_tag_hidden_from_preview_and_members},

@@ -28,10 +28,6 @@
 
 #define CRIT  100. // Threshold for computing rms is above 100th of its max
 
-// Sanity cap for a single signal buffer. Anything beyond this is a bogus length
-// (e.g., a corrupt wav header) rather than a signal a user meant to create.
-#define MAX_BUFFER_BYTES ((uint64_t)4 * 1024 * 1024 * 1024)
-
 #define RETURN_0_MSG(str) {	strcpy(errstr, str);		return 0;	}
 
 void filter(int nTabs, double *num, double *den, int length, double *in, double *out);
@@ -393,7 +389,7 @@ body& body::UpdateBuffer(uint64_t length, uint64_t offset)	// Set nSamples. Re-a
 		// offset shifts the existing content to the right; it must fit in the new length.
 		if (offset > length || nSamples + offset > length)
 			throw std::length_error("UpdateBuffer: offset does not fit in the requested length.");
-		if (reqBufSize > MAX_BUFFER_BYTES)
+		if (reqBufSize > maxBufferBytes)
 			throw std::length_error("Requested signal size is too large (corrupt input or bad length?).");
 		if (length > nSamples) {
 			bool *newlogbuf = new bool[reqBufSize];

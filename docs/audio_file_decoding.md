@@ -53,7 +53,15 @@ Both paths behave identically after decoding:
 - `bufType` is set to `'R'`.
 - If the file's sample rate differs from the current environment `fs`, the signal is resampled to
   the environment rate via `__resample`, and a resampler error is raised as a runtime error.
-- Remote `http(s)` sources are downloaded to a `ScopedTempFile` first, then decoded from disk.
+- `wave(url)` decodes a downloaded WAV from a temporary file. `file(url)` returns the downloaded bytes.
+
+### Progressive reads
+
+Use `x <- wave(path [, start_ms, end_ms])` or `x <- file(path)` at the top level to retain completed audio as it is decoded. Local WAVs and MP3s use the same format detection and sample rates as synchronous loads. A ranged WAV starts its output at time zero. The decoder and sample-rate converter keep their state between blocks.
+
+`x.h.completed` counts published frames per channel. `x.h.block` contains the latest block. Use `stop(x.h)` to cancel and keep the available samples. A decode failure after publication leaves the prefix available with `x.h.status` equal to `"error"` and the explanation in `x.h.error`. An embedder polls with `aux_poll_async` and can retain both channels using `aux_progressive_audio` and `aux_progressive_right_samples`.
+
+A simple local WAV path exposes the first block at launch. Computed paths, MP3 frame counting, and remote downloads use a deferred preparation step. During that step the destination has `status = "requested"`. Once prepared, audio is published incrementally. Local text and URL byte results from `file()` publish once.
 
 ---
 
@@ -142,9 +150,7 @@ Resampling is likewise not an option token. `wave()` resamples on read to reach 
 
 ## Verification status
 
-There are no regression tests covering MP3 decoding (`grep mp3 test/` is empty) — it has only been
-exercised manually through `file()`. Adding coverage requires committing a small MP3 fixture, which
-is why it was not done alongside the initial decode support.
+The progressive file regression in `test/regression_wav_header.cpp` generates silent MP3 frames and checks the decoded stereo frame count. Its WAV cases compare each sample against a synchronous read across multiple sample rates, time ranges, and channel counts.
 
 WAV decoding and encoding are covered by `test/regression_wav_header.cpp`. On the write side each
 format round-trips through `wavwrite` → `file()` and is checked against the expected header fields

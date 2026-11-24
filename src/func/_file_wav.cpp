@@ -8,6 +8,7 @@
 #include <math.h>
 #include <inttypes.h>
 #include <vector>
+#include <memory>
 #include "_file_wav.h"
 
 static int read_u16_le(FILE* f, uint16_t* out)
@@ -166,6 +167,7 @@ int wav_read_header(const std::string& fname, WavInfo& out, std::string& estr)
         estr += fname;
         return 0;
     }
+    std::unique_ptr<FILE, decltype(&fclose)> file(fp, fclose);
     memset(&out, 0, sizeof(out));
     uint64_t start = tell_pos(fp);
 
@@ -234,7 +236,7 @@ int wav_read_header(const std::string& fname, WavInfo& out, std::string& estr)
             if (!skip_bytes(fp, expected_end - actual_end)) return 0;
         }
     }
-    int res = fclose(fp);
+    int res = fclose(file.release());
     if (res) {
         estr = fname + "--Error: Cannot close file.";
         return 0;

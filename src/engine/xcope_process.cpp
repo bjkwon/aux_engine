@@ -93,14 +93,19 @@ private:
 	std::map<const AstNode*, AstNode> nodes;
 };
 
+struct DeferredResult {
+	CVar value;
+	std::shared_ptr<ProgressiveAudioJob> fileJob;
+};
+
 class DeferredAssignment {
 public:
 	string destination;
-	std::future<CVar> result;
+	std::future<DeferredResult> result;
 	std::map<uint64_t, map<string, double>> handleUpdates;
 };
 
-CVar* AuxScope::start_deferred(const AstNode* lhs, const AstNode* rhs)
+CVar* AuxScope::start_deferred(const AstNode* lhs, const AstNode* rhs, bool progressiveFile)
 {
 	static std::atomic<uint64_t> sequence{1};
 	const auto id = sequence++;
@@ -126,18 +131,19 @@ CVar* AuxScope::start_deferred(const AstNode* lhs, const AstNode* rhs)
 	auto job = std::make_shared<DeferredAssignment>();
 	job->destination = lhs->str;
 	// Capture inputs before replacing the destination (x <- x + 1).
-	job->result = std::async(std::launch::async, [syntax, root, env = std::move(env), vars = Vars, id]() mutable {
+	job->result = std::async(std::launch::async, [syntax, root, env = std::move(env), vars = Vars, id, progressiveFile]() mutable -> DeferredResult {
 		AuxScope worker(env.get());
 		worker.Vars.swap(vars);
 		worker.node = root;
+		if (progressiveFile) worker.progressiveFileCall = root;
 		string error;
 		try {
 			CVar value = *worker.Compute(root);
-			if (value.progressive) {
+			if (!worker.preparedFileJob && value.progressive) {
 				value.progressive.reset();
 				value.strut.erase("h");
 			}
-			return value;
+			return {std::move(value), std::move(worker.preparedFileJob)};
 		} catch (const AuxScope_exception& e) {
 			error = e.outstr;
 		} catch (const std::exception& e) {
@@ -151,7 +157,7 @@ CVar* AuxScope::start_deferred(const AstNode* lhs, const AstNode* rhs)
 		result.strut["status"].SetString("error");
 		result.strut["message"].SetString(error.c_str());
 		result.strut["job_id"].SetValue(id);
-		return result;
+		return {std::move(result), nullptr};
 	});
 	CVar pending;
 	pending.strut["status"].SetString("requested");
@@ -191,10 +197,11 @@ int AuxScope::publish_deferred()
 		}
 		string destination = std::move(job.destination);
 		if (!destination.empty() && Vars.count(destination)) {
-			auto value = job.result.get();
+			auto result = job.result.get();
 			for (const auto& update : job.handleUpdates)
-				apply_handle_members(value, update.first, update.second);
-			SetVar(destination.c_str(), &value);
+				apply_handle_members(result.value, update.first, update.second);
+			SetVar(destination.c_str(), &result.value);
+			if (result.fileJob) bind_progressive_job(destination, std::move(result.fileJob));
 			++changed;
 		}
 		it = deferredJobs.erase(it);

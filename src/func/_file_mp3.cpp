@@ -6,48 +6,57 @@
 #define DR_MP3_IMPLEMENTATION
 #include "../third_party/dr_mp3.h"
 #include "_file_mp3.h"
+#include "audio_file_reader.h"
+#include <stdexcept>
 
 using namespace std;
 
-uint64_t mp3_read_float32(const string& fname, double beginMs, double durMs,
+AudioFileReader open_mp3_reader(const string& path, double beginMs, bool countFrames)
+{
+	auto initialized = std::make_unique<drmp3>();
+	if (!drmp3_init_file(initialized.get(), path.c_str(), nullptr))
+		throw runtime_error("Unable to open/parse MP3 file: " + path);
+	auto decoder = shared_ptr<drmp3>(initialized.release(), [](drmp3* p) {
+		drmp3_uninit(p);
+		delete p;
+	});
+	AudioFileReader reader;
+	reader.sampleRate = decoder->sampleRate;
+	reader.channels = decoder->channels;
+	if (countFrames) reader.frames = drmp3_get_pcm_frame_count(decoder.get());
+	uint64_t start = static_cast<uint64_t>(beginMs / 1000.0 * reader.sampleRate + 0.5);
+	if (start && !drmp3_seek_to_pcm_frame(decoder.get(), start))
+		throw runtime_error("Error seeking in MP3 file: " + path);
+	reader.read = [decoder](size_t frames, vector<float>& out) {
+		out.resize(frames * decoder->channels);
+		size_t got = drmp3_read_pcm_frames_f32(decoder.get(), frames, out.data());
+		out.resize(got * decoder->channels);
+		return got;
+	};
+	return reader;
+}
+
+uint64_t mp3_read_float32(const string& path, double beginMs, double durMs,
 	Mp3Info& info, vector<float>& out, string& estr)
 {
 	estr.clear();
-	drmp3 mp3;
-	if (!drmp3_init_file(&mp3, fname.c_str(), NULL)) {
-		estr = "Unable to open/parse MP3 file: " + fname;
-		return 0;
-	}
-	info.sample_rate = mp3.sampleRate;
-	info.num_channels = mp3.channels;
-
-	uint64_t beginFrame = (uint64_t)(beginMs / 1000.0 * info.sample_rate + 0.5);
-	uint64_t frames2read = (durMs < 0)
-		? UINT64_MAX
-		: (uint64_t)(durMs / 1000.0 * info.sample_rate + 0.5);
-
-	if (beginFrame > 0 && !drmp3_seek_to_pcm_frame(&mp3, beginFrame)) {
-		estr = "Error seeking in MP3 file: " + fname;
-		drmp3_uninit(&mp3);
-		return 0;
-	}
-
-	const uint64_t kChunkFrames = 4096;
-	vector<float> chunk(kChunkFrames * info.num_channels);
-	uint64_t framesRead = 0;
-	for (;;) {
-		uint64_t want = kChunkFrames;
-		if (frames2read != UINT64_MAX) {
-			uint64_t remaining = frames2read - framesRead;
-			if (remaining == 0) break;
-			want = remaining < kChunkFrames ? remaining : kChunkFrames;
+	try {
+		auto reader = open_mp3_reader(path, beginMs, false);
+		info.sample_rate = reader.sampleRate;
+		info.num_channels = reader.channels;
+		uint64_t limit = durMs < 0 ? UINT64_MAX : uint64_t(durMs / 1000.0 * info.sample_rate + 0.5);
+		uint64_t done = 0;
+		vector<float> chunk;
+		while (done < limit) {
+			size_t want = std::min<uint64_t>(4096, limit - done);
+			size_t got = reader.read(want, chunk);
+			out.insert(out.end(), chunk.begin(), chunk.end());
+			done += got;
+			if (got < want) break;
 		}
-		uint64_t got = drmp3_read_pcm_frames_f32(&mp3, want, chunk.data());
-		if (got == 0) break;
-		out.insert(out.end(), chunk.begin(), chunk.begin() + got * info.num_channels);
-		framesRead += got;
-		if (got < want) break; // EOF
+		return done;
+	} catch (const std::exception& e) {
+		estr = e.what();
+		return 0;
 	}
-	drmp3_uninit(&mp3);
-	return framesRead;
 }

@@ -157,6 +157,7 @@ Cfunction set_builtin_function##FUNCTION_NAME(fGate fp);
 class body
 {
 public:
+	static constexpr uint64_t maxBufferBytes = uint64_t(4) * 1024 * 1024 * 1024;
 	uint64_t nSamples;
 	uint64_t nGroups;
 	union
