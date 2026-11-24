@@ -1,4 +1,4 @@
-#include "fftw3.h"
+#include "fftw_planner.h"
 #include "functions_common.h"
 
 Cfunction set_builtin_function_hilbenvlope(fGate fp)
@@ -38,7 +38,7 @@ CSignal __hilbert(float* buf, unsigned int len, void* pargin, void* pargout)
 
 	// FFT
 	for (unsigned int k = 0; k < len; k++) in[k][0] = buf[k];
-	fftwf_plan p1 = fftwf_plan_dft_1d(len, in, mid, FFTW_FORWARD, FFTW_ESTIMATE);
+	fftwf_plan p1 = withFftwPlannerLock(fftwf_plan_dft_1d, len, in, mid, FFTW_FORWARD, FFTW_ESTIMATE);
 	fftwf_execute(p1);
 
 	memset(in, 0, len * sizeof(fftwf_complex));
@@ -57,11 +57,11 @@ CSignal __hilbert(float* buf, unsigned int len, void* pargin, void* pargout)
 	// leave the rest zero
 
 	// iFFT
-	fftwf_plan p2 = fftwf_plan_dft_1d(len, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
+	fftwf_plan p2 = withFftwPlannerLock(fftwf_plan_dft_1d, len, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
 	fftwf_execute(p2);
 
-	fftwf_destroy_plan(p1);
-	fftwf_destroy_plan(p2);
+	withFftwPlannerLock(fftwf_destroy_plan, p1);
+	withFftwPlannerLock(fftwf_destroy_plan, p2);
 
 	for (unsigned int k = 0; k < len; k++)
 	{// scale back down since the resulting array is scaled by len.
@@ -90,7 +90,7 @@ CSignal __hilbert(double* buf, unsigned int len, void* pargin, void* pargout)
 
 	// FFT
 	for (unsigned int k = 0; k < len; k++) in[k][0] = buf[k];
-	fftw_plan p1 = fftw_plan_dft_1d(len, in, mid, FFTW_FORWARD, FFTW_ESTIMATE);
+	fftw_plan p1 = withFftwPlannerLock(fftw_plan_dft_1d, len, in, mid, FFTW_FORWARD, FFTW_ESTIMATE);
 	fftw_execute(p1);
 
 	memset(in, 0, len * sizeof(fftw_complex));
@@ -109,11 +109,11 @@ CSignal __hilbert(double* buf, unsigned int len, void* pargin, void* pargout)
 	// leave the rest zero
 
 	// iFFT
-	fftw_plan p2 = fftw_plan_dft_1d(len, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
+	fftw_plan p2 = withFftwPlannerLock(fftw_plan_dft_1d, len, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
 	fftw_execute(p2);
 
-	fftw_destroy_plan(p1);
-	fftw_destroy_plan(p2);
+	withFftwPlannerLock(fftw_destroy_plan, p1);
+	withFftwPlannerLock(fftw_destroy_plan, p2);
 
 	for (unsigned int k = 0; k < len; k++)
 	{// scale back down since the resulting array is scaled by len.

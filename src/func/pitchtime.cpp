@@ -1,5 +1,5 @@
 #include "functions_common.h"
-#include "fftw3.h"
+#include "fftw_planner.h"
 
 /* An audio handle has the following members:
 *	fs: sampling rate
@@ -254,20 +254,20 @@ using PvComplex = fftwf_complex;
 static inline auxtype* pv_alloc_real(size_t n) { return (auxtype*)fftwf_malloc(sizeof(auxtype) * n); }
 static inline PvComplex* pv_alloc_complex(size_t n) { return (PvComplex*)fftwf_malloc(sizeof(PvComplex) * n); }
 static inline void pv_free(void* p) { fftwf_free(p); }
-static inline PvPlan pv_plan_r2c(int n, auxtype* in, PvComplex* out) { return fftwf_plan_dft_r2c_1d(n, in, out, FFTW_ESTIMATE); }
-static inline PvPlan pv_plan_c2r(int n, PvComplex* in, auxtype* out) { return fftwf_plan_dft_c2r_1d(n, in, out, FFTW_ESTIMATE); }
+static inline PvPlan pv_plan_r2c(int n, auxtype* in, PvComplex* out) { return withFftwPlannerLock(fftwf_plan_dft_r2c_1d, n, in, out, FFTW_ESTIMATE); }
+static inline PvPlan pv_plan_c2r(int n, PvComplex* in, auxtype* out) { return withFftwPlannerLock(fftwf_plan_dft_c2r_1d, n, in, out, FFTW_ESTIMATE); }
 static inline void pv_execute(PvPlan p) { fftwf_execute(p); }
-static inline void pv_destroy(PvPlan p) { fftwf_destroy_plan(p); }
+static inline void pv_destroy(PvPlan p) { withFftwPlannerLock(fftwf_destroy_plan, p); }
 #else
 using PvPlan = fftw_plan;
 using PvComplex = fftw_complex;
 static inline auxtype* pv_alloc_real(size_t n) { return (auxtype*)fftw_malloc(sizeof(auxtype) * n); }
 static inline PvComplex* pv_alloc_complex(size_t n) { return (PvComplex*)fftw_malloc(sizeof(PvComplex) * n); }
 static inline void pv_free(void* p) { fftw_free(p); }
-static inline PvPlan pv_plan_r2c(int n, auxtype* in, PvComplex* out) { return fftw_plan_dft_r2c_1d(n, in, out, FFTW_ESTIMATE); }
-static inline PvPlan pv_plan_c2r(int n, PvComplex* in, auxtype* out) { return fftw_plan_dft_c2r_1d(n, in, out, FFTW_ESTIMATE); }
+static inline PvPlan pv_plan_r2c(int n, auxtype* in, PvComplex* out) { return withFftwPlannerLock(fftw_plan_dft_r2c_1d, n, in, out, FFTW_ESTIMATE); }
+static inline PvPlan pv_plan_c2r(int n, PvComplex* in, auxtype* out) { return withFftwPlannerLock(fftw_plan_dft_c2r_1d, n, in, out, FFTW_ESTIMATE); }
 static inline void pv_execute(PvPlan p) { fftw_execute(p); }
-static inline void pv_destroy(PvPlan p) { fftw_destroy_plan(p); }
+static inline void pv_destroy(PvPlan p) { withFftwPlannerLock(fftw_destroy_plan, p); }
 #endif
 
 struct PvWorkspace

@@ -87,6 +87,7 @@ void yyerror (AstNode **pproot, char **errmsg, char const *s);
 %right '^' /* exponentiation */
 %left T_LOGIC_NOT T_POSITIVE T_NEGATIVE /* unary plus/minus */
 %token T_TRANSPOSE
+%token T_ASYNC_ASSIGN "<-"
 %token T_EOF	0	"end of text"
 
 %parse-param {AstNode **pproot}
@@ -124,7 +125,6 @@ void print_token_value(FILE *file, int type, YYSTYPE value);
 char *getT_ID_str(AstNode *p);
 void handle_tilde(AstNode *proot, AstNode *pp, YYLTYPE loc);
 int consumeNumberUnitMask(int line, int col);
-int consumeAsyncAssignMarker(int line, int col);
 %}
 
 /* Note to myself 6/7/2018--------------
@@ -223,7 +223,7 @@ line:	T_NEWLINE
 	| stmt eol2
 	{
 		$$ = $1;
-		$$->suppress = 1 | ($$->suppress & (AST_SUPPRESS_ASYNC_ASSIGN | AST_SUPPRESS_PROGRESSIVE_ASSIGN));
+		$$->suppress = 1 | ($$->suppress & AST_SUPPRESS_ASYNC_ASSIGN);
 	}
 	|  tid '|' T_ID T_NUMBER
 	{
@@ -975,17 +975,18 @@ assign: tid assign2this
 	{
 		$$ = $1;
 		$$->child = $2;
-		int marker = consumeAsyncAssignMarker(@2.first_line, @2.first_column);
-		if (marker == 1) $$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
-		if (marker == 2) $$->suppress |= AST_SUPPRESS_PROGRESSIVE_ASSIGN;
 	}
 	| varblock assign2this
 	{
 		$$ = $1;
 		$$->child = $2;
-		int marker = consumeAsyncAssignMarker(@2.first_line, @2.first_column);
-		if (marker == 1) $$->suppress |= AST_SUPPRESS_ASYNC_ASSIGN;
-		if (marker == 2) $$->suppress |= AST_SUPPRESS_PROGRESSIVE_ASSIGN;
+	}
+	| T_ID T_ASYNC_ASSIGN exp_range
+	{
+		$$ = newAstNode(T_ID, @1);
+		$$->str = $1;
+		$$->child = $3;
+		$$->suppress = AST_SUPPRESS_ASYNC_ASSIGN;
 	}
 	| varblock '=' assign
 	{ //c=a(2)=44

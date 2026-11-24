@@ -405,8 +405,8 @@ public:
         if (!pEnv) throw std::invalid_argument("EngineRuntime is null");
         if (!fd)   throw std::invalid_argument("fd is 0");
 
-        auto it = pEnv->fileTable.find(fd);
-        if (it == pEnv->fileTable.end() || !it->second.open || !it->second.fp) {
+        auto it = pEnv->files->entries.find(fd);
+        if (it == pEnv->files->entries.end() || !it->second.open || !it->second.fp) {
             throw std::runtime_error("Invalid or closed file descriptor");
         }
         fp = it->second.fp;
@@ -434,14 +434,16 @@ void _fopen(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 	{
 		past->Sig.Reset(1);
 		past->Sig.UpdateBuffer(1);
-		uint64_t fd = past->pEnv->nextFD++;
-		past->pEnv->fileTable[fd] = FileEntry{ fl, true };
+		std::lock_guard<std::mutex> lock(past->pEnv->files->mutex);
+		uint64_t fd = past->pEnv->files->nextFD++;
+		past->pEnv->files->entries[fd] = FileEntry{ fl, true };
 		past->Sig.SetValue((auxtype)fd);
 	}
 }
 
 void _fclose(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
+	std::lock_guard<std::mutex> lock(past->pEnv->files->mutex);
 	try {
 		auto fd = (uint64_t)past->Sig.value();
 		FileAccessGuard fog(fd, past->pEnv);
@@ -451,7 +453,7 @@ void _fclose(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 			past->Sig.SetValue(-1.);
 		}
 		else {
-			auto it = past->pEnv->fileTable.find(fd);
+			auto it = past->pEnv->files->entries.find(fd);
 			it->second.fp = nullptr;
 			it->second.open = false;
 		}
@@ -565,6 +567,7 @@ size_t fwrite_general(T var, const CVar& sig, string prec, FILE* file, int bytes
 
 void _fwrite(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
+	std::lock_guard<std::mutex> lock(past->pEnv->files->mutex);
 	try {
 		CVar firstarg = args[0];
 		int bytes;
@@ -726,6 +729,7 @@ size_t fread_general(T var, CVar& sig, FILE* file, int bytes, auxtype _count)
 */
 void _fread(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
+	std::lock_guard<std::mutex> lock(past->pEnv->files->mutex);
 	int bytes;
 	string prec;
 	ostringstream oss;
@@ -814,6 +818,7 @@ void _fread(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 // fd.filepointer(4) // go forward 4 bytes from the current file pointer
 void _filepointer(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
+	std::lock_guard<std::mutex> lock(past->pEnv->files->mutex);
 	try {
 		ostringstream oss;
 		string estr;

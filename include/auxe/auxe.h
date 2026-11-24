@@ -316,6 +316,7 @@ AUXE_API int aux_forget_udf(auxContext* ctx, const string& udfname);
 AUXE_API auxDebugAction aux_debug_resume(auxContext** ctx, auxDebugAction act);
 AUXE_API const char* aux_get_status_message(auxContext* ctx);
 // filterUpdatesOnly permits a host to retain cached top-level audio prefixes.
+// Poll on the evaluator thread to publish <- results and advance progblocks.
 // Filter handle members, including h.block, can still change at the same size.
 AUXE_API int aux_poll_async(auxContext* ctx, bool& filterUpdatesOnly);
 AUXE_API int aux_poll_async(auxContext* ctx); // returns number of async assignments and progressive results updated

@@ -1,4 +1,7 @@
 #include <auxe/auxe.h>
+#include "AuxScope.h"
+
+#include <future>
 
 #include <filesystem>
 #include <fstream>
@@ -1365,9 +1368,9 @@ static bool case_progressive_filter_and_replay(std::string& err) {
                   "if first\n out=0\nelse\n out=prior\nend\nout+=chunk.length\n", s.err)
       || !define_register(s, "countframes")
       || !eval("x=tone(137,1300)") || !eval("b=[0.5 0.25]")
-      || !eval("ref=filt(x,b,[1 -0.2])") || !eval("y <~ x.filt(b,[1 -0.2]);")
+      || !eval("ref=filt(x,b,[1 -0.2])") || !eval("y <- x.filt(b,[1 -0.2]);")
       || !eval("snap=y") || !eval("handle=y.h")
-      || !eval("events <~ progblocks(y,10,\"countframes\")")) {
+      || !eval("events <- progblocks(y,10,\"countframes\")")) {
     err = s.err; return false;
   }
   auto stream = aux_progressive_audio(aux_get_var(s.ctx,"y"));
@@ -1411,7 +1414,7 @@ static bool case_progressive_filter_and_replay(std::string& err) {
                   "if first\n out.clean=chunk\nelse\n out=prior\n out.clean ++= chunk\nend\n"
                   "out.h.completed=out.clean\nout.h.stream=1\n", s.err) ||
       !define_register(s, "audioresult") ||
-      !eval("result <~ progblocks(x,10,\"audioresult\")")) {
+      !eval("result <- progblocks(x,10,\"audioresult\")")) {
     err = s.err; return false;
   }
   aux_poll_async(s.ctx);
@@ -1448,7 +1451,7 @@ static bool case_progressive_filter_and_replay(std::string& err) {
       !std::equal(inputSamples.begin(), inputSamples.end(), played->samples())) {
     err = "Reducer did not preserve completed audio and sample count: " + s.err; return false;
   }
-  if (!eval("result <~ progblocks(x,10,\"audioresult\")")) { err = s.err; return false; }
+  if (!eval("result <- progblocks(x,10,\"audioresult\")")) { err = s.err; return false; }
   aux_poll_async(s.ctx);
   if (!eval("audio_handle=play(result.h.completed)") || !played || played->finished()) {
     err = "Could not start a second progressive playback: " + s.err; return false;
@@ -1490,16 +1493,145 @@ static bool case_progressive_assignment_rejected_without_side_effect(std::string
   if (!s.ok()) { err = s.err; return false; }
   std::string preview;
   if (!expect_eval_ok(s, "x=7", "initial assignment") ||
-      aux_eval(&s.ctx, "x <~ 42", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR) ||
+      aux_eval(&s.ctx, "x <- filt(42,1)", s.cfg, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_ERROR) ||
       preview.find("Progressive assignment supports") == std::string::npos) {
     err = s.err.empty() ? "Expected a progressive-assignment error: " + preview : s.err;
     return false;
+  }
+  if (!write_file(s.dir / "innerjob.aux", "function out=innerjob(n)\nout <- n+1\n", s.err) ||
+      !define_register(s, "innerjob") || !expect_eval_error(s, "x=innerjob(1)", "nested scope") ||
+      !expect_eval_error(s, "x <~ filt(x,1)", "retired assignment spelling") ||
+      !expect_eval_error(s, "x <- filt()", "empty filter call") ||
+      !expect_eval_error(s, "x <- progblocks()", "empty block processor call") ||
+      !expect_eval_error(s, "x.a <- 4", "member destination")) {
+    err = s.err; return false;
   }
   AuxObj x = aux_get_var(s.ctx, "x");
   double value = 0;
   if (!x || aux_copy_vector(x, &value, 1) != 1 || value != 7) {
     err = "Rejected progressive assignment changed its destination.";
     return false;
+  }
+  return true;
+}
+
+static bool case_deferred_assignment(std::string& err) {
+  Session s("case_deferred_assignment");
+  if (!s.ok()) { err = s.err; return false; }
+  auto eval = [&](const std::string& cmd) { return expect_eval_ok(s, cmd, cmd); };
+  auto waitForResult = [&](const char* name) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+      aux_poll_async(s.ctx);
+      AuxObj value = aux_get_var(s.ctx, name);
+      auto status = aux_get_struct_member(value, "status");
+      if (value && (!status || aux_get_struct_member(value, "message"))) return true;
+      std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    s.err = std::string("Timed out waiting for ") + name;
+    return false;
+  };
+  if (!write_file(s.dir / "increment.aux", "function out=increment(x)\nout=x+1\n", s.err) ||
+      !define_register(s, "increment") || !eval("x=40") ||
+      !eval("x <- increment(x); other <- sum([1 2 3]); xcopy=12") ||
+      !waitForResult("x") || !waitForResult("other") ||
+      !expect_scalar_value(s,"x",41) || !expect_scalar_value(s,"other",6) ||
+      !expect_scalar_value(s,"xcopy",12) ||
+      !eval("sig=[1 2 3]") || !eval("y <- filt(sig,1)") ||
+      !aux_progressive_audio(aux_get_var(s.ctx,"y")) ||
+      !eval("r <- sum(filt(sig,1))") || !waitForResult("r") || !expect_scalar_value(s,"r",6) ||
+      !eval("freq <- fft(sig); freq2 <- fft(sig); direct=fft(sig)") ||
+      !waitForResult("freq") || !waitForResult("freq2") ||
+      !eval("fd <- fopen(\"" + (s.dir / "deferred.bin").generic_string() + "\",\"wb\")") ||
+      !waitForResult("fd") || !eval("closed=fclose(fd)") || !expect_scalar_value(s,"closed",0) ||
+      !eval("bad <- missing_value") || !waitForResult("bad") ||
+      !aux_get_struct_member(aux_get_var(s.ctx,"bad"),"message")) {
+    err = s.err.empty() ? "Unexpected nonblocking assignment result" : s.err;
+    return false;
+  }
+  auto* reference = reinterpret_cast<const CVar*>(aux_get_var(s.ctx, "direct"));
+  for (const auto* name : {"freq", "freq2"}) {
+    auto* actual = reinterpret_cast<const CVar*>(aux_get_var(s.ctx, name));
+    if (!reference || !actual || !reference->nSamples || reference->type() != actual->type() ||
+        reference->nSamples != actual->nSamples ||
+        memcmp(reference->buf, actual->buf, reference->nSamples * reference->bufBlockSize) != 0) {
+      err = "Deferred FFT differs from synchronous FFT"; return false;
+    }
+  }
+  return true;
+}
+
+static bool case_late_deferred_completion(std::string& err) {
+  // Hold the worker inside a mock backend until the newer assignment is visible.
+  struct Gate {
+    std::promise<void> entered;
+    std::promise<void> release;
+    bool succeed;
+  };
+  Session s("case_late_deferred_completion");
+  if (!s.ok() || !expect_eval_ok(s,"inputSig=tone(440,20)","prepare input")) {
+    err = s.err; return false;
+  }
+  for (const std::string replacement : {"v=19", "v <- 19", "v <- filt(inputSig,1)", "clear(v)"}) {
+    Gate gate;
+    gate.succeed = replacement == "v=19" || replacement == "clear(v)";
+    auxPlaybackBackend backend{};
+    backend.userdata = &gate;
+    backend.start = [](void* data, uint64_t, AuxObj, int, int, std::string&) {
+      auto& gate = *static_cast<Gate*>(data);
+      auto released = gate.release.get_future();
+      gate.entered.set_value();
+      released.wait();
+      if (!gate.succeed) throw std::runtime_error("test backend error");
+      return 1;
+    };
+    auto entered = gate.entered.get_future();
+    aux_install_playback_backend(s.ctx, backend);
+    bool ok = expect_eval_ok(s,"v <- play(inputSig)","launch deferred call") &&
+              entered.wait_for(std::chrono::seconds(5)) == std::future_status::ready &&
+              aux_get_struct_member(aux_get_var(s.ctx,"v"),"job_id") &&
+              expect_eval_ok(s,replacement,replacement);
+    gate.release.set_value();
+    // Discarded completions intentionally report zero changes to the host.
+    auto* scope = reinterpret_cast<AuxScope*>(s.ctx);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!scope->deferredJobs.empty() && std::chrono::steady_clock::now() < deadline) {
+      aux_poll_async(s.ctx);
+      std::this_thread::yield();
+    }
+    if (!ok || !scope->deferredJobs.empty()) {
+      err = "Deferred job did not finish after replacement: " + replacement + " " + s.err; return false;
+    }
+    AuxObj v = aux_get_var(s.ctx,"v");
+    bool preserved = false;
+    if (replacement == "clear(v)") preserved = !v;
+    else if (replacement == "v <- filt(inputSig,1)") preserved = bool(aux_progressive_audio(v));
+    else preserved = expect_scalar_value(s, "v", 19);
+    if (!preserved) {
+      err = "Late completion overwrote " + replacement; return false;
+    }
+  }
+  // A short session can finish before the returned handle is bound.
+  std::promise<uint64_t> started;
+  auto handle = started.get_future();
+  auxPlaybackBackend backend{};
+  backend.userdata = &started;
+  backend.start = [](void* data, uint64_t id, AuxObj, int, int, std::string&) {
+    static_cast<std::promise<uint64_t>*>(data)->set_value(id);
+    return 1;
+  };
+  aux_install_playback_backend(s.ctx, backend);
+  if (!expect_eval_ok(s,"v <- play(inputSig)","deferred handle") ||
+      handle.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    err = "Deferred playback did not start: " + s.err; return false;
+  }
+  aux_update_runtime_handle_members(s.ctx, handle.get(), {{"active",0},{"prog",100}});
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!aux_poll_async(s.ctx) && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  if (!expect_eval_ok(s,"active=v.active","terminal playback status") ||
+      !expect_scalar_value(s,"active",0)) {
+    err = "Deferred playback lost its terminal status: " + s.err; return false;
   }
   return true;
 }
@@ -1511,6 +1643,8 @@ int main() {
   };
 
   const TestCase tests[] = {
+    {"case_late_deferred_completion", case_late_deferred_completion},
+    {"case_deferred_assignment", case_deferred_assignment},
     {"case_streamplay_source", case_streamplay_source},
     {"case_progressive_filter_and_replay", case_progressive_filter_and_replay},
     {"case_progressive_assignment_rejected_without_side_effect", case_progressive_assignment_rejected_without_side_effect},

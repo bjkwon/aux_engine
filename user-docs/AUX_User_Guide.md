@@ -113,6 +113,17 @@ c = [1 2; 3 4];
 
 Assignment creates or replaces a variable in the current workspace.
 
+Use `<-` at the top level to start work and continue with the next statement. Its destination must be a plain variable. The outermost operation selects the publication behavior.
+
+```aux
+x = tone(330,8000);
+b = [0.5 0.5];
+y <- filt(x,b);                  // also y <- x.filt(b)
+r <- sum(filt(x,b));             // publishes one final result
+```
+
+Direct `filt` calls expose completed samples through `y` and progress through `y.h`. A direct `events <- progblocks(x,10,"callback_name")` publishes the callback accumulator after each window. Invalid arguments to either operation raise an error. Other expressions, including calls to ordinary UDFs, evaluate with the variable values captured at launch. Their destination initially has `status = "requested"` and a `job_id`. When the host polls, it receives the final value or a struct with `status = "error"`, `message`, and `job_id`. Reassigning or clearing the destination prevents an older job from publishing there. Use a space in comparisons such as `x < -1` to keep the negative sign separate from `<`. Replace the former progressive spelling `<~` with `<-` when updating scripts.
+
 Compound assignment is supported:
 
 ```aux

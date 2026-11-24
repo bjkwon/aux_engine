@@ -2,6 +2,10 @@
 
 This file records user-visible changes in each auxe release.
 
+## Unreleased
+
+- Use `<-` for nonblocking assignment. A direct `filt` or `progblocks` call publishes progress. Other expressions publish one final value or error. Replace `<~` with `<-` in existing scripts. Reassigning or clearing the destination prevents late results from overwriting it.
+
 ## 2.6.1 - 2026-10-01
 
 auxe API revised to handle UDF search roots affected by app's system calls such as `cd`

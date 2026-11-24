@@ -341,8 +341,9 @@ void aux_close(auxContext* ctx)
     if (!ctx || !frame->pEnv) {
         return ;  // null pointer or environment not initialized
     }
-    delete frame->pEnv;
-    delete frame;
+    auto* env = frame->pEnv;
+    delete frame; // Join deferred workers before releasing their runtime.
+    delete env;
 }
 
 string aux_version(auxContext* ctx)
@@ -781,6 +782,7 @@ int aux_del_var(auxContext* ctx, const string& varname)
     if (!frame) return -1;
     auto it = frame->Vars.find(varname);
     if (it != frame->Vars.end()) {
+        frame->forget_assignment(varname);
         frame->Vars.erase(it);
         return 0;
     }
@@ -865,12 +867,12 @@ int aux_set_handle_values(auxContext* ctx, const string& varname, const vector<u
         }
         out.MarkHandle(true);
     }
+    frame->forget_assignment(varname);
     frame->Vars[varname] = out;
     return 0;
 }
 
-namespace {
-bool update_runtime_handle_members_recursive(CVar& value, uint64_t handle_id, const map<string, double>& members)
+bool AuxScope::apply_handle_members(CVar& value, uint64_t handle_id, const map<string, double>& members)
 {
     bool updated = false;
     if (value.IsRuntimeHandle() && ISSCALARG(value.type())) {
@@ -886,23 +888,23 @@ bool update_runtime_handle_members_recursive(CVar& value, uint64_t handle_id, co
         }
     }
     for (auto& entry : value.strut) {
-        updated = update_runtime_handle_members_recursive(entry.second, handle_id, members) || updated;
+        updated = apply_handle_members(entry.second, handle_id, members) || updated;
     }
     for (auto& entry : value.cell) {
-        updated = update_runtime_handle_members_recursive(entry, handle_id, members) || updated;
+        updated = apply_handle_members(entry, handle_id, members) || updated;
     }
     return updated;
 }
-} // namespace
 
 int aux_update_runtime_handle_members(auxContext* ctx, uint64_t handle_id, const map<string, double>& members)
 {
     auto* frame = reinterpret_cast<AuxScope*>(ctx);
     if (!frame || handle_id == 0 || members.empty()) return -1;
 
+    frame->remember_deferred_handle_members(handle_id, members);
     bool updated = false;
     for (auto& entry : frame->Vars) {
-        updated = update_runtime_handle_members_recursive(entry.second, handle_id, members) || updated;
+        updated = AuxScope::apply_handle_members(entry.second, handle_id, members) || updated;
     }
     return updated ? 0 : 1;
 }

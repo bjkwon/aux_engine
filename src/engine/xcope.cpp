@@ -10,6 +10,7 @@
 #include "utils.h"
 #include <assert.h>
 #include <thread>
+#include <mutex>
 #include <cmath>
 #include <limits>
 
@@ -117,7 +118,6 @@ static int count_time_unit_bits(int mask)
 static const int UDF_DECL_REGULAR = 2;
 static const int UDF_DECL_STATIC = 3;
 static const int UDF_DECL_MEMBER = 4;
-static const int AST_FLAG_EXPLICIT_ZERO_ARG_CALL = 1 << 21;
 
 static double unit_mask_to_ms_scale(int mask)
 {
@@ -607,7 +607,6 @@ AuxScope::~AuxScope()
 EngineRuntime::EngineRuntime(const int fs)
 	: Fs(fs), curLine(-1), inTryCatch(0)
 {
-	nextFD = 1;
 	version = AUXCORE_VERSION;
 	shutdown = false;
 	if (fs < 0)	throw "Internal error: Fs must be greater than 1.";
@@ -689,8 +688,12 @@ EngineRuntime::EngineRuntime(const int fs)
 EngineRuntime::~EngineRuntime()
 {
 	auxe_close_native_modules(*this);
-	for (auto it = fileTable.begin(); it != fileTable.end(); it++) {
-		if ((*it).second.open) fclose((*it).second.fp);
+}
+
+OpenFiles::~OpenFiles()
+{
+	for (auto& entry : entries) {
+		if (entry.second.open) fclose(entry.second.fp);
 	}
 }
 
@@ -815,6 +818,9 @@ AstNode* AuxScope::makenodes(const string& instr)
 		nodeAllocated = false;
 	}
 	AstNode* out = NULL;
+	// Flex and Bison share scanner, location and error state across scopes.
+	static std::mutex parserMutex;
+	std::lock_guard<std::mutex> parserLock(parserMutex);
 	reset_stack_ptr();
 	if ((res = yysetNewStringToScan(parser_input.c_str(), NULL /*str_autocorrect*/)))
 	{
@@ -2316,6 +2322,7 @@ AuxScope& AuxScope::SetVar(const char* name, CVar* prhs, CVar* pBase)
  //non-NULL pBase --> pBase is a class variable. name will be a member variable under pBase.
 	if (!pBase) // top AuxScope
 	{
+		forget_assignment(name);
 		map<string, CVar>::iterator it = Vars.find(name);
 		map<string, vector<CVar*>>::iterator jt = GOvars.find(name);
 		if (prhs->IsGO()) // name and prhs should be fed to GOvars
@@ -3087,6 +3094,7 @@ vector<string> AuxScope::ClearVar(const char *var, CVar *psigBase)
 		if (it != Vars.end())
 		{
 			out.push_back((*it).first);
+			forget_assignment(var);
 			Vars.erase(it);
 		}
 	}
@@ -3133,7 +3141,7 @@ EngineRuntime& EngineRuntime::operator=(const EngineRuntime& rhs)
 		udf = rhs.udf;
 		shutdown = rhs.shutdown;
 		glovar = rhs.glovar;
-		nextFD = rhs.nextFD;
+		files = rhs.files;
 	}
 	return *this;
 }

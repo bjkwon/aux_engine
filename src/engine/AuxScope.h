@@ -1,6 +1,7 @@
 #pragma once
 #include <cstring>
 #include <memory> // unique_ptr
+#include <mutex>
 #include <set>
 #include <auxe/auxe.h>
 #include "aux_classes.h"
@@ -164,6 +165,14 @@ struct FileEntry {
 	bool open;
 };
 
+// A descriptor returned by a deferred fopen belongs to the same AUX session.
+struct OpenFiles {
+	std::mutex mutex;
+	unordered_map<uint64_t, FileEntry> entries;
+	uint64_t nextFD = 1;
+	~OpenFiles();
+};
+
 struct NativeModuleFunction {
 	string module_name;
 	auxNativeFunctionDesc desc;
@@ -184,8 +193,7 @@ public:
 	DebugHook debug_hook;
 	map<string, UDF> udf;
 	map<string, AuxClassDef> classes;
-	unordered_map<uint64_t, FileEntry> fileTable;
-	uint64_t nextFD = 1;
+	std::shared_ptr<OpenFiles> files = std::make_shared<OpenFiles>();
 	int Fs;
 	int curLine; // used for control F10
 	int inTryCatch;
@@ -376,7 +384,13 @@ public:
 	int channelWriteSel = 0; // 0=whole object, 1=.left-scoped, 2=.right-scoped write target (set by get_available_struct_item, consumed by insertreplace)
 	CVar* process_statement(const AstNode* pnode);
 	int drain_async_jobs(bool& filterUpdatesOnly);
-    CVar* start_progressive(const AstNode* lhs, const AstNode* rhs);
+    CVar* start_deferred(const AstNode* lhs, const AstNode* rhs);
+    int publish_deferred();
+    static bool apply_handle_members(CVar& value, uint64_t id, const map<string, double>& members);
+    void remember_deferred_handle_members(uint64_t id, const map<string, double>& members);
+    void forget_assignment(const string& name);
+    std::vector<std::shared_ptr<class DeferredAssignment>> deferredJobs;
+    CVar* try_start_progressive(const AstNode* lhs, const AstNode* rhs);
     int publish_progressive();
     bool cancel_progressive(const CVar& handle);
     CVar* start_reducer(const AstNode* lhs, const AstNode* args);

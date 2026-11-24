@@ -5,6 +5,8 @@
 #include <fstream>
 #include <cassert>
 #include <iomanip>
+#include <future>
+#include <chrono>
 #include <auxe/auxe.h>
 #include <filesystem> // Include the C++17 filesystem library
 #if AUX_HAVE_PORTAUDIO
@@ -32,6 +34,16 @@ auxConfig cfg;
 
 static bool g_paused = false;
 static auxDebugInfo g_pauseInfo;
+
+#ifndef _WIN32
+static auxContext* promptContext = nullptr;
+
+static int poll_at_prompt()
+{
+	aux_poll_async(promptContext);
+	return 0;
+}
+#endif
 
 static std::string prompt_text()
 {
@@ -234,15 +246,19 @@ int main(int argc, char** argv)
 			add_history(line.c_str());
 		}
 		historyfstream.close();
+		promptContext = ctx;
+		rl_event_hook = poll_at_prompt;
 #endif
-		int commandid = 0;
 		while (1)
 		{
 			try {
 #ifdef _WIN32
 				auto prompt = prompt_text();
 				printf("%s", prompt.c_str());
-				getline(cin, input);
+				auto read = std::async(std::launch::async, [&input] { return bool(getline(cin, input)); });
+				while (read.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready)
+					aux_poll_async(ctx);
+				if (!read.get()) break;
 #else
 				input.clear();
 				auto prompt = prompt_text();
@@ -259,11 +275,12 @@ int main(int argc, char** argv)
 					historyfstream2 << readbuf << endl;
 					historyfstream2.close();
 					input = readbuf;
-					free(readbuf);
 				}
+				free(readbuf);
 #endif
 				if (!input.empty())
 				{
+					aux_poll_async(ctx);
 					interpreter(&ctx, cfg.display_precision, input, true);
 					programExit = false;
 				}
@@ -289,6 +306,10 @@ int main(int argc, char** argv)
 				std::cout << "Error: " << e.what() << "\n";
 			}
 		}
+#ifndef _WIN32
+		rl_event_hook = nullptr;
+		promptContext = nullptr;
+#endif
 	}
 	else {
 		input = argv[1];

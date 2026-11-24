@@ -88,26 +88,36 @@ public:
     }
 };
 
-CVar* AuxScope::start_progressive(const AstNode* lhs, const AstNode* rhs) {
+CVar* AuxScope::try_start_progressive(const AstNode* lhs, const AstNode* rhs) {
     auto fail = [&](const char* msg) { throw exception_etc(*this, rhs, msg).raise(); };
-    if (!lhs || lhs->type != T_ID || lhs->alt || level != 1 || dad)
-        fail("Progressive assignment requires a plain top-level destination.");
-    const AstNode* call = rhs ? rhs->alt : nullptr;
-    const AstNode* args = call ? call->alt : nullptr;
-    if (rhs && rhs->type == T_ID && !strcmp(rhs->str,"progblocks") && call && call->type == N_ARGS && !call->alt)
-        return start_reducer(lhs, call);
-    const AstNode* coeff = nullptr;
+    // A chain dispatches on its last call. A surrounding expression or a
+    // subsequent method consumes the complete, ordinarily evaluated value.
+    const AstNode* function = rhs;
+    while (function->alt && (function->alt->type != N_ARGS || function->alt->alt))
+        function = function->alt;
+    if (function->type != T_ID && function->type != N_CALL && function->type != N_STRUCT)
+        return nullptr;
+    const AstNode* args = function->alt;
+    if (!(args && args->type == N_ARGS) && function->type != N_CALL &&
+        !(function->suppress & AST_FLAG_EXPLICIT_ZERO_ARG_CALL))
+        return nullptr;
+    if (function == rhs && !strcmp(function->str, "progblocks")) {
+        if (!args) fail("Use progblocks(audio, window_ms, callback_name[, arguments...]).");
+        return start_reducer(lhs, args);
+    }
+    if (strcmp(function->str, "filt")) return nullptr;
+    const AstNode* coeff = args ? args->child : nullptr;
+    const AstNode* input = nullptr;
+    if (function == rhs && coeff && coeff->type == T_ID && !coeff->alt) {
+        input = coeff;
+        coeff = coeff->next;
+    } else if (rhs->type == T_ID && rhs->alt == function && function->type == N_STRUCT) {
+        input = rhs;
+    }
     const CVar* source = nullptr;
-    if (rhs && rhs->type == T_ID && call && call->type == N_STRUCT &&
-        !strcmp(call->str,"filt") && args && args->type == N_ARGS && !args->alt) {
-        auto it = Vars.find(rhs->str);
+    if (input) {
+        auto it = Vars.find(input->str);
         if (it != Vars.end()) source = &it->second;
-        coeff = args->child;
-    } else if (rhs && rhs->type == T_ID && !strcmp(rhs->str,"filt") && call &&
-               call->type == N_ARGS && !call->alt && call->child && call->child->type == T_ID && !call->child->alt) {
-        auto it = Vars.find(call->child->str);
-        if (it != Vars.end()) source = &it->second;
-        coeff = call->child->next;
     }
     if (!source || !coeff) fail("Progressive assignment supports x.filt(b[, a[, state]]) on a signal variable.");
     if (!source->nSamples || source->next || source->chain || source->bufBlockSize != sizeof(double) ||

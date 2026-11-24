@@ -78,7 +78,8 @@ h.stop();
 | `interp` | `interp(x, ...)` | Interpolate data. |
 | `resample` | `resample(aud, fs)` | Resample audio. |
 | `sort` | `sort(x)` | Sort values. |
-| `filt` | `filt(x, b, a)` | Filter with coefficients. |
+| `filt` | `filt(x, b, a)` | Filter with coefficients. With `y <- filt(x,b,a)` or `y <- x.filt(b,a)`, completed samples are available progressively. |
+| `progblocks` | `r <- progblocks(x,window_ms,"callback_name",...)` | Publish the callback accumulator after each window of mono audio. |
 | `filtfilt` | `filtfilt(x, b, a)` | Zero-phase forward/backward filtering. |
 | `conv` | `conv(x, y)` | Convolution. |
 | `lpf` | `lpf(x, ...)` | Low-pass filtering. |

@@ -36,9 +36,6 @@ int auto_comp = 0;
 int parseTimeLiteralMs(const char *text, double *out_ms, int *out_mask);
 void registerNumberUnitMask(int line, int col, int mask);
 int consumeNumberUnitMask(int line, int col);
-void registerAsyncAssignMarker(int line, int col);
-void registerProgressiveAssignMarker(int line, int col);
-int consumeAsyncAssignMarker(int line, int col);
 
 #define TIME_UNIT_S 1
 #define TIME_UNIT_M 2
@@ -53,14 +50,6 @@ typedef struct NumUnitTag_t {
 
 NumUnitTag *gNumUnitHead = NULL, *gNumUnitTail = NULL;
 
-typedef struct AsyncAssignTag_t {
-	int line;
-	int col;
-	int kind;
-	struct AsyncAssignTag_t *next;
-} AsyncAssignTag;
-
-AsyncAssignTag *gAsyncAssignHead = NULL, *gAsyncAssignTail = NULL;
 %}
 %pointer
 %option noyywrap
@@ -173,17 +162,10 @@ TIME_LITERAL	({NUM}[smh])+
 	yy_pop_state();
 	return (unsigned char)yytext[0];
 	}
-"<~" {
-	yylloc.last_column += yyleng;
-	registerProgressiveAssignMarker(yylloc.first_line, yylloc.first_column);
-    if (str_mirror) strcat(str_mirror, yytext);
-	return '=';
-	}
 "<-" {
 	yylloc.last_column += yyleng;
-	registerAsyncAssignMarker(yylloc.first_line, yylloc.first_column);
     if (str_mirror) strcat(str_mirror, yytext);
-	return '=';
+	return T_ASYNC_ASSIGN;
 	}
 if|else|elseif|end|while|for|break|continue|switch|case|otherwise|function|static|return|sigma|try|catch|catchback|"=="|"!="|"<="|">="|"<>"|"->"|">>"|"&&"|"**"|"||"|"++"|"+="|"-="|"*="|"/="|"^="|"->="|"<>="|"#="|"~="|"@="|"@@="|"++="|".."|"->"|->=|">>="|"%=" {
 	yylloc.last_column += yyleng;
@@ -282,12 +264,6 @@ int yysetNewStringToScan(const char *source, char *mirror)
 		free(p);
 	}
 	gNumUnitHead = gNumUnitTail = NULL;
-	AsyncAssignTag *ap, *anext;
-	for (ap = gAsyncAssignHead; ap; ap = anext) {
-		anext = ap->next;
-		free(ap);
-	}
-	gAsyncAssignHead = gAsyncAssignTail = NULL;
 	if (LexStringMax != LEX_STRING_MAX_INITIAL) {
 		/* (re)initialize LexString and LexStringMax - can be shrinking for memory efficiency */
 		LexStringMax = LEX_STRING_MAX_INITIAL;
@@ -313,12 +289,6 @@ int yysetNewFileToScan(FILE *source)
 		free(p);
 	}
 	gNumUnitHead = gNumUnitTail = NULL;
-	AsyncAssignTag *ap, *anext;
-	for (ap = gAsyncAssignHead; ap; ap = anext) {
-		anext = ap->next;
-		free(ap);
-	}
-	gAsyncAssignHead = gAsyncAssignTail = NULL;
 	if (LexStringMax != LEX_STRING_MAX_INITIAL) {
 		/* (re)initialize LexString and LexStringMax - can be shrinking for memory efficiency */
 		LexStringMax = LEX_STRING_MAX_INITIAL;
@@ -402,49 +372,6 @@ int consumeNumberUnitMask(int line, int col)
 			if (gNumUnitTail == p) gNumUnitTail = prev;
 			free(p);
 			return out;
-		}
-		prev = p;
-		p = p->next;
-	}
-	return 0;
-}
-
-static void registerAssignMarker(int line, int col, int kind)
-{
-	AsyncAssignTag *node = (AsyncAssignTag *)malloc(sizeof(AsyncAssignTag));
-	if (!node) return;
-	node->line = line;
-	node->col = col;
-	node->kind = kind;
-	node->next = NULL;
-	if (gAsyncAssignTail)
-		gAsyncAssignTail->next = node;
-	else
-		gAsyncAssignHead = node;
-	gAsyncAssignTail = node;
-}
-
-void registerAsyncAssignMarker(int line, int col)
-{
-	registerAssignMarker(line, col, 1);
-}
-
-void registerProgressiveAssignMarker(int line, int col)
-{
-	registerAssignMarker(line, col, 2);
-}
-
-int consumeAsyncAssignMarker(int line, int col)
-{
-	AsyncAssignTag *prev = NULL, *p = gAsyncAssignHead;
-	while (p) {
-		if (p->line == line && p->col == col) {
-			if (prev) prev->next = p->next;
-			else gAsyncAssignHead = p->next;
-			if (gAsyncAssignTail == p) gAsyncAssignTail = prev;
-			int kind = p->kind;
-			free(p);
-			return kind;
 		}
 		prev = p;
 		p = p->next;

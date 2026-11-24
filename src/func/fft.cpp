@@ -1,4 +1,4 @@
-#include "fftw3.h"
+#include "fftw_planner.h"
 #include "functions_common.h"
 
 Cfunction set_builtin_function_fft(fGate fp)
@@ -68,7 +68,7 @@ CSignal __fft2(float* buf, unsigned int len, void* pargin, void* pargout)
 	out = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * fftRealsize);
 	memcpy(in, buf, sizeof(float) * fftsize);
 
-	p = fftwf_plan_dft_r2c_1d(fftsize, in, out, FFTW_ESTIMATE);
+	p = withFftwPlannerLock(fftwf_plan_dft_r2c_1d, fftsize, in, out, FFTW_ESTIMATE);
 	fftwf_execute(p);
 
 	CSignal res((int)fs.value());
@@ -79,7 +79,7 @@ CSignal __fft2(float* buf, unsigned int len, void* pargin, void* pargout)
 	for (int k = 1; k < fftRealsize; k++)
 		res.cbuf[fftsize - k] = conj(tp[k]);
 
-	fftwf_destroy_plan(p);
+	withFftwPlannerLock(fftwf_destroy_plan, p);
 	fftwf_free(in);
 	fftwf_free(out);
 	return res;
@@ -116,7 +116,7 @@ CSignal __ifft2(float* buf, unsigned int len, void* pargin, void* pargout)
 		memcpy(in, cbuf, sizeof(fftwf_complex) * halfsize);
 		if (fftsize % 2 == 0)
 			memcpy(&in[fftsize / 2], &cbuf[fftsize / 2], sizeof(*cbuf));
-		p = fftwf_plan_dft_c2r_1d(fftsize, in, out, FFTW_ESTIMATE);
+		p = withFftwPlannerLock(fftwf_plan_dft_c2r_1d, fftsize, in, out, FFTW_ESTIMATE);
 		fftwf_execute(p);
 		memcpy(res.buf, out, sizeof(float) * fftsize);
 		res.bufBlockSize = sizeof(float);
@@ -136,14 +136,14 @@ CSignal __ifft2(float* buf, unsigned int len, void* pargin, void* pargout)
 				memcpy(in + k, buf + k, sizeof(*res.buf));
 				memset((char*)(in + k) + sizeof(*res.buf), 0, sizeof(*res.buf));
 			}
-		p = fftwf_plan_dft_1d(fftsize, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
+		p = withFftwPlannerLock(fftwf_plan_dft_1d, fftsize, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
 		fftwf_execute(p);
 		memcpy(res.cbuf, out, sizeof(fftwf_complex) * fftsize);
 		res /= (float)fftsize;
 		fftwf_free(out);
 	}
 	fftwf_free(in);
-	fftwf_destroy_plan(p);
+	withFftwPlannerLock(fftwf_destroy_plan, p);
 	res.snap = 0; // this should be zero, but just to make sure
 	return res;
 }
@@ -167,7 +167,7 @@ CSignal __fft2(double* buf, unsigned int len, void* pargin, void* pargout)
 	out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * fftRealsize);
 	memcpy(in, buf, sizeof(double) * fftsize);
 
-	p = fftw_plan_dft_r2c_1d(fftsize, in, out, FFTW_ESTIMATE);
+	p = withFftwPlannerLock(fftw_plan_dft_r2c_1d, fftsize, in, out, FFTW_ESTIMATE);
 	fftw_execute(p);
 
 	CSignal res((int)fs.value());
@@ -178,7 +178,7 @@ CSignal __fft2(double* buf, unsigned int len, void* pargin, void* pargout)
 	for (int k = 1; k < fftRealsize; k++)
 		res.cbuf[fftsize - k] = conj(tp[k]);
 
-	fftw_destroy_plan(p);
+	withFftwPlannerLock(fftw_destroy_plan, p);
 	fftw_free(in);
 	fftw_free(out);
 	return res;
@@ -215,7 +215,7 @@ CSignal __ifft2(double* buf, unsigned int len, void* pargin, void* pargout)
 		memcpy(in, cbuf, sizeof(fftw_complex) * halfsize);
 		if (fftsize % 2 == 0)
 			memcpy(&in[fftsize / 2], &cbuf[fftsize / 2], sizeof(*cbuf));
-		p = fftw_plan_dft_c2r_1d(fftsize, in, out, FFTW_ESTIMATE);
+		p = withFftwPlannerLock(fftw_plan_dft_c2r_1d, fftsize, in, out, FFTW_ESTIMATE);
 		fftw_execute(p);
 		memcpy(res.buf, out, sizeof(double) * fftsize);
 		res.bufBlockSize = sizeof(double);
@@ -235,14 +235,14 @@ CSignal __ifft2(double* buf, unsigned int len, void* pargin, void* pargout)
 				memcpy(in + k, buf + k, sizeof(*res.buf));
 				memset((char*)(in + k) + sizeof(*res.buf), 0, sizeof(*res.buf));
 			}
-		p = fftw_plan_dft_1d(fftsize, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
+		p = withFftwPlannerLock(fftw_plan_dft_1d, fftsize, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
 		fftw_execute(p);
 		memcpy(res.cbuf, out, sizeof(fftw_complex) * fftsize);
 		res /= (double)fftsize;
 		fftw_free(out);
 	}
 	fftw_free(in);
-	fftw_destroy_plan(p);
+	withFftwPlannerLock(fftw_destroy_plan, p);
 	res.snap = 0; // this should be zero, but just to make sure
 	return res;
 }

@@ -698,11 +698,11 @@ Cfunction set_builtin_function_clear(fGate fp)
 
 void _clear(AuxScope* past, const AstNode* pnode, const vector<CVar>& args)
 {
-	AstNode* arg0 = (AstNode*)pnode;
-	if (arg0->type==T_ID)
-		past->ClearVar(arg0->str);
-	else if (arg0->type == N_STRUCT)
-		past->ClearVar(past->pheadthisline->str);
+	const AstNode* target = pnode->type == N_STRUCT ? past->pheadthisline :
+		pnode->alt ? pnode->alt->child : nullptr;
+	if (target && target->type == T_ID &&
+		(pnode->type == N_STRUCT || !target->alt))
+		past->ClearVar(target->str);
 	else
 		throw exception_etc(*past, pnode, "Only variables can be cleared.").raise();
 	auto tp = past->Sig.type();

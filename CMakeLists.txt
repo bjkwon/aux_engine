@@ -286,7 +286,10 @@ if(AUXE_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/test/regression_eval_errors.cpp
   )
   target_link_libraries(auxe_regression_eval_errors PRIVATE auxe)
-  target_include_directories(auxe_regression_eval_errors PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(auxe_regression_eval_errors PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
+  )
 
   add_test(
     NAME auxe_regression_eval_errors

@@ -4,8 +4,8 @@
 #include <assert.h>
 #include <deque>
 #include <iostream>
-#include <thread>
-#include <mutex>
+#include <chrono>
+#include <future>
 #include <atomic>
 #include <memory>
 #include <sstream>
@@ -13,8 +13,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-
-static const int AST_FLAG_ASYNC_ASSIGN = AST_SUPPRESS_ASYNC_ASSIGN;
 
 static std::string lower_copy_process(const std::string& in)
 {
@@ -51,139 +49,162 @@ static bool class_has_declared_member_process(const EngineRuntime* env, const CV
 	return cfd->second.defaults.find(member_name) != cfd->second.defaults.end();
 }
 
-namespace {
-struct AsyncAssignJob {
-	uint64_t id = 0;
-	EngineRuntime* env = nullptr;
-	AuxScope* owner = nullptr;
-	std::string lhs;
-	std::string rhs_expr;
-	std::map<std::string, CVar> vars_snapshot;
-	std::atomic<bool> done{ false };
-	bool ok = false;
-	CVar value;
-	std::string error;
+// The evaluator can mutate its AST and the caller may parse another command
+// immediately. Give the worker its own RHS, preserving shared tail pointers.
+class DeferredSyntax {
+public:
+	AstNode* copy(const AstNode* src) {
+		if (!src) return nullptr;
+		auto [it, inserted] = nodes.try_emplace(src, *src);
+		auto& dst = it->second;
+		if (!inserted) return &dst;
+		dst.str = nullptr;
+		if (src->type == N_MATRIX || src->type == N_VECTOR)
+			dst.str = reinterpret_cast<char*>(copy(reinterpret_cast<const AstNode*>(src->str)));
+		else if (src->str || src->type == N_TSEQ) {
+			// TSeq writes a diagnostic name into this parser-owned buffer.
+			size_t size = src->str ? strlen(src->str) + 1 : 0;
+			if (src->type == N_TSEQ) size = std::max(size, sizeof("TSEQ"));
+			dst.str = static_cast<char*>(calloc(size, 1));
+			if (!dst.str) throw std::bad_alloc();
+			if (src->str) strcpy(dst.str, src->str);
+		}
+		dst.child = copy(src->child);
+		dst.alt = copy(src->alt);
+		dst.next = copy(src->next);
+		dst.tail = copy(src->tail);
+		return &dst;
+	}
+
+	void copyUdfTrees(UDF& udf) {
+		udf.uxtree = copy(udf.uxtree);
+		udf.DebugBreaks.clear();
+		for (auto& entry : udf.switch_case) entry.second = copy(entry.second);
+		for (auto& entry : udf.local) copyUdfTrees(entry.second);
+	}
+
+	~DeferredSyntax() {
+		for (auto& entry : nodes) {
+			auto& node = entry.second;
+			if (node.type != N_MATRIX && node.type != N_VECTOR) free(node.str);
+		}
+	}
+private:
+	std::map<const AstNode*, AstNode> nodes;
 };
 
-std::mutex g_async_jobs_mtx;
-std::vector<std::shared_ptr<AsyncAssignJob>> g_async_jobs;
-std::atomic<uint64_t> g_async_job_id{ 1 };
-}
+class DeferredAssignment {
+public:
+	string destination;
+	std::future<CVar> result;
+	std::map<uint64_t, map<string, double>> handleUpdates;
+};
 
-static bool get_line_text(const std::string& script, int line, std::string& out)
+CVar* AuxScope::start_deferred(const AstNode* lhs, const AstNode* rhs)
 {
-	if (line <= 0) return false;
-	std::stringstream ss(script);
-	for (int k = 1; std::getline(ss, out); ++k)
-		if (k == line) return true;
-	return false;
-}
-
-static bool extract_async_rhs_from_script(const AuxScope& ths, const AstNode* pnode, std::string& rhs)
-{
-	std::string line;
-	if (!get_line_text(ths.script, pnode->line, line))
-		return false;
-	auto pos = line.find("<-");
-	if (pos == std::string::npos)
-		return false;
-	rhs = line.substr(pos + 2);
-	trim(rhs, std::string(" \t\r;"));
-	return !rhs.empty();
-}
-
-static void start_async_assign_job(AuxScope& ths, const std::string& lhs, const std::string& rhs_expr, uint64_t id)
-{
-	auto job = std::make_shared<AsyncAssignJob>();
-	job->id = id;
-	job->env = ths.pEnv;
-	job->owner = &ths;
-	job->lhs = lhs;
-	job->rhs_expr = rhs_expr;
-	job->vars_snapshot = ths.Vars;
-	{
-		std::lock_guard<std::mutex> lk(g_async_jobs_mtx);
-		g_async_jobs.push_back(job);
-	}
-	std::thread([job, env = ths.pEnv]() {
+	static std::atomic<uint64_t> sequence{1};
+	const auto id = sequence++;
+	auto syntax = std::make_shared<DeferredSyntax>();
+	auto* root = syntax->copy(rhs);
+	// UDF registration, mutable UDF syntax and try/catch state belong to one
+	// evaluator. Snapshot them before the caller is free to edit its workspace.
+	auto env = std::make_unique<EngineRuntime>(pEnv->Fs);
+	env->AuxPath = pEnv->AuxPath;
+	env->builtin = pEnv->builtin;
+	env->classes = pEnv->classes;
+	env->udf.insert(pEnv->udf.begin(), pEnv->udf.end());
+	for (auto& entry : env->udf) syntax->copyUdfTrees(entry.second);
+	env->files = pEnv->files;
+	env->graphics_backend = pEnv->graphics_backend;
+	env->playback_backend = pEnv->playback_backend;
+	env->stream_start = pEnv->stream_start;
+	env->native_module_functions = pEnv->native_module_functions;
+	env->native_module_aliases = pEnv->native_module_aliases;
+	// The launching runtime owns these libraries until all workers have joined.
+	env->native_modules = pEnv->native_modules;
+	for (auto& entry : env->native_modules) entry.second.library = nullptr;
+	auto job = std::make_shared<DeferredAssignment>();
+	job->destination = lhs->str;
+	// Capture inputs before replacing the destination (x <- x + 1).
+	job->result = std::async(std::launch::async, [syntax, root, env = std::move(env), vars = Vars, id]() mutable {
+		AuxScope worker(env.get());
+		worker.Vars.swap(vars);
+		worker.node = root;
+		string error;
 		try {
-			AuxScope worker(env);
-			worker.Vars = job->vars_snapshot;
-			const std::string expr = "__async_tmp__=" + job->rhs_expr;
-			AstNode* n = worker.makenodes(expr);
-			if (!n)
-				throw std::runtime_error("Invalid async RHS expression.");
-			worker.node = n;
-			worker.Compute();
-			auto it = worker.Vars.find("__async_tmp__");
-			if (it == worker.Vars.end())
-				throw std::runtime_error("Async RHS did not produce a value.");
-			job->value = it->second;
-			job->ok = true;
+			CVar value = *worker.Compute(root);
+			if (value.progressive) {
+				value.progressive.reset();
+				value.strut.erase("h");
+			}
+			return value;
+		} catch (const AuxScope_exception& e) {
+			error = e.outstr;
+		} catch (const std::exception& e) {
+			error = e.what();
+		} catch (const char* e) {
+			error = e ? e : "Deferred assignment failed.";
+		} catch (...) {
+			error = "Deferred assignment failed.";
 		}
-		catch (const AuxScope_exception& e) {
-			job->error = e.outstr;
-			job->ok = false;
-		}
-		catch (const std::exception& e) {
-			job->error = e.what();
-			job->ok = false;
-		}
-		catch (const char* e) {
-			job->error = e ? e : "Async job failed.";
-			job->ok = false;
-		}
-		catch (...) {
-			job->error = "Async job failed.";
-			job->ok = false;
-		}
-		job->done.store(true);
-	}).detach();
+		CVar result;
+		result.strut["status"].SetString("error");
+		result.strut["message"].SetString(error.c_str());
+		result.strut["job_id"].SetValue(id);
+		return result;
+	});
+	CVar pending;
+	pending.strut["status"].SetString("requested");
+	pending.strut["job_id"].SetValue(id);
+	SetVar(lhs->str, &pending);
+	Sig = pending;
+	deferredJobs.push_back(std::move(job));
+	return &Sig;
 }
 
-static int drain_async_assign_jobs(AuxScope& ths)
+void AuxScope::forget_assignment(const string& name)
+{
+	for (auto& job : deferredJobs)
+		if (job->destination == name) job->destination.clear();
+	reducers.erase(name);
+}
+
+// A short playback or recording can finish before the worker returns its
+// handle. Replay host updates on publication, including handles inside structs.
+void AuxScope::remember_deferred_handle_members(uint64_t id, const map<string, double>& members)
+{
+	for (auto& job : deferredJobs) {
+		if (job->destination.empty()) continue;
+		auto& latest = job->handleUpdates[id];
+		for (const auto& member : members) latest[member.first] = member.second;
+	}
+}
+
+int AuxScope::publish_deferred()
 {
 	int changed = 0;
-	std::lock_guard<std::mutex> lk(g_async_jobs_mtx);
-	for (auto it = g_async_jobs.begin(); it != g_async_jobs.end(); )
-	{
-		auto& job = *it;
-		if (job->env != ths.pEnv || !job->done.load())
-		{
+	for (auto it = deferredJobs.begin(); it != deferredJobs.end();) {
+		auto& job = **it;
+		if (job.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
 			++it;
 			continue;
 		}
-		if (job->ok)
-		{
-			if (job->owner && job->owner->pEnv == ths.pEnv)
-				job->owner->SetVar(job->lhs.c_str(), &job->value);
-			else
-				ths.SetVar(job->lhs.c_str(), &job->value);
+		string destination = std::move(job.destination);
+		if (!destination.empty() && Vars.count(destination)) {
+			auto value = job.result.get();
+			for (const auto& update : job.handleUpdates)
+				apply_handle_members(value, update.first, update.second);
+			SetVar(destination.c_str(), &value);
 			++changed;
 		}
-		else
-		{
-			CVar carrier, status, msg, jid;
-			status.SetString("error");
-			msg.SetString(job->error.c_str());
-			jid.SetValue((auxtype)job->id);
-			carrier.strut["status"] = status;
-			carrier.strut["message"] = msg;
-			carrier.strut["job_id"] = jid;
-			if (job->owner && job->owner->pEnv == ths.pEnv)
-				job->owner->SetVar(job->lhs.c_str(), &carrier);
-			else
-				ths.SetVar(job->lhs.c_str(), &carrier);
-			++changed;
-		}
-		it = g_async_jobs.erase(it);
+		it = deferredJobs.erase(it);
 	}
 	return changed;
 }
 
 int AuxScope::drain_async_jobs(bool& filterUpdatesOnly)
 {
-	const int assignments = drain_async_assign_jobs(*this);
+	const int assignments = publish_deferred();
 	const int filters = publish_progressive();
 	const int reducers = publish_reducers();
 	filterUpdatesOnly = assignments == 0 && reducers == 0;
@@ -1076,37 +1097,18 @@ void AuxScope::sanitize_cell_node(const AstNode* p)
 
 CVar* AuxScope::process_statement(const AstNode* pnode)
 {
-	drain_async_assign_jobs(*this);
+	publish_deferred();
 	const AstNode* plhs;
 	const AstNode* prhs;
 	bool isreplica = get_nodes_left_right_sides(pnode, &plhs, &prhs);
-	if (pnode && (pnode->suppress & AST_SUPPRESS_PROGRESSIVE_ASSIGN))
-		return start_progressive(plhs, prhs);
-	const bool is_async_assign = (pnode && (pnode->suppress & AST_FLAG_ASYNC_ASSIGN));
-	if (is_async_assign)
-	{
-		if (!plhs || plhs->type != T_ID || plhs->alt)
-			throw exception_etc(*this, pnode, "Async assignment currently supports only plain variables (x <- expr).").raise();
-		if (level != 1 || dad != nullptr)
-			throw exception_etc(*this, pnode, "Async assignment is allowed only at top-level scope.").raise();
-		std::string rhs_expr;
-		if (!extract_async_rhs_from_script(*this, pnode, rhs_expr))
-			throw exception_etc(*this, pnode, "Cannot parse async RHS from source line.").raise();
-		const uint64_t job_id = g_async_job_id.fetch_add(1);
-		CVar carrier, status, jid;
-		status.SetString("requested");
-		jid.SetValue((auxtype)job_id);
-		carrier.strut["status"] = status;
-		carrier.strut["job_id"] = jid;
-		SetVar(plhs->str, &carrier);
-		Sig = carrier;
-		start_async_assign_job(*this, plhs->str, rhs_expr, job_id);
+	if (pnode->suppress & AST_SUPPRESS_ASYNC_ASSIGN) {
+		if (!plhs || plhs->type != T_ID || plhs->alt || level != 1 || dad)
+			throw exception_etc(*this, pnode, "<- requires a plain top-level destination.").raise();
 		u.pending_assign_lhs = nullptr;
 		u.pending_assign_rhs_call = nullptr;
-		return &Sig;
+		if (auto* value = try_start_progressive(plhs, prhs)) return value;
+		return start_deferred(plhs, prhs);
 	}
-	u.pending_assign_lhs = nullptr;
-	u.pending_assign_rhs_call = nullptr;
 	// If RHS evaluation is interrupted by debugger pause, complete assignment on resume.
 	// Covers simple scalar assignment (x = udf(...)) and vector output binding
 	// ([out1,out2] = udf(...)).
@@ -1138,6 +1140,7 @@ CVar* AuxScope::process_statement(const AstNode* pnode)
 		eval_lhs(plhs, prhs, index, RHS, typelhs, contig, isreplica);
 		right_to_left(plhs, index, RHS, typelhs, contig, isreplica ? prhs:NULL);
 		if (plhs->type == T_ID && plhs->alt) {
+			forget_assignment(plhs->str);
 			auto dest = Vars.find(plhs->str);
 			if (dest != Vars.end() && dest->second.progressive) {
 				dest->second.progressive.reset();

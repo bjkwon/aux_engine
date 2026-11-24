@@ -92,7 +92,8 @@ extern int yydebug;
     T_LOGIC_NOT = 294,             /* T_LOGIC_NOT  */
     T_POSITIVE = 295,              /* T_POSITIVE  */
     T_NEGATIVE = 296,              /* T_NEGATIVE  */
-    T_TRANSPOSE = 297              /* T_TRANSPOSE  */
+    T_TRANSPOSE = 297,             /* T_TRANSPOSE  */
+    T_ASYNC_ASSIGN = 298           /* "<-"  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -107,7 +108,7 @@ union YYSTYPE
 	char *str;
 	AstNode *pnode;
 
-#line 111 "src/engine/psycon.tab.h"
+#line 112 "src/engine/psycon.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
